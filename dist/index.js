@@ -4,8 +4,9 @@ const require = __bundleRequire(import.meta.url);
 import * as os from 'os';
 import os__default from 'os';
 import * as crypto$1 from 'crypto';
+import crypto__default from 'crypto';
 import * as fs from 'fs';
-import { promises, writeFileSync, existsSync } from 'fs';
+import fs__default, { promises, writeFileSync, existsSync } from 'fs';
 import * as path from 'path';
 import * as http from 'http';
 import http__default from 'http';
@@ -2818,24 +2819,15 @@ function requireDispatcherBase () {
 	const kOnDestroyed = Symbol('onDestroyed');
 	const kOnClosed = Symbol('onClosed');
 	const kInterceptedDispatch = Symbol('Intercepted Dispatch');
-	const kWebSocketOptions = Symbol('webSocketOptions');
 
 	class DispatcherBase extends Dispatcher {
-	  constructor (opts) {
+	  constructor () {
 	    super();
 
 	    this[kDestroyed] = false;
 	    this[kOnDestroyed] = null;
 	    this[kClosed] = false;
 	    this[kOnClosed] = [];
-	    this[kWebSocketOptions] = opts?.webSocket ?? {};
-	  }
-
-	  get webSocketOptions () {
-	    return {
-	      maxFragments: this[kWebSocketOptions].maxFragments ?? 131072,
-	      maxPayloadSize: this[kWebSocketOptions].maxPayloadSize ?? 128 * 1024 * 1024
-	    }
 	  }
 
 	  get destroyed () {
@@ -8785,9 +8777,6 @@ function requireClientH1 () {
 	const FastBuffer = Buffer[Symbol.species];
 	const addListener = util.addListener;
 	const removeAllListeners = util.removeAllListeners;
-	const kIdleSocketValidation = Symbol('kIdleSocketValidation');
-	const kIdleSocketValidationTimeout = Symbol('kIdleSocketValidationTimeout');
-	const kSocketUsed = Symbol('kSocketUsed');
 
 	let extractBody;
 
@@ -9010,69 +8999,27 @@ function requireClientH1 () {
 
 	      const offset = llhttp.llhttp_get_error_pos(this.ptr) - currentBufferPtr;
 
-	      if (ret !== constants.ERROR.OK) {
-	        const body = data.subarray(offset);
-
-	        if (ret === constants.ERROR.PAUSED_UPGRADE) {
-	          this.onUpgrade(body);
-	        } else if (ret === constants.ERROR.PAUSED) {
-	          this.paused = true;
-	          socket.unshift(body);
-	        } else {
-	          throw this.createError(ret, body)
+	      if (ret === constants.ERROR.PAUSED_UPGRADE) {
+	        this.onUpgrade(data.slice(offset));
+	      } else if (ret === constants.ERROR.PAUSED) {
+	        this.paused = true;
+	        socket.unshift(data.slice(offset));
+	      } else if (ret !== constants.ERROR.OK) {
+	        const ptr = llhttp.llhttp_get_error_reason(this.ptr);
+	        let message = '';
+	        /* istanbul ignore else: difficult to make a test case for */
+	        if (ptr) {
+	          const len = new Uint8Array(llhttp.memory.buffer, ptr).indexOf(0);
+	          message =
+	            'Response does not match the HTTP/1.1 protocol (' +
+	            Buffer.from(llhttp.memory.buffer, ptr, len).toString() +
+	            ')';
 	        }
+	        throw new HTTPParserError(message, constants.ERROR[ret], data.slice(offset))
 	      }
 	    } catch (err) {
 	      util.destroy(socket, err);
 	    }
-	  }
-
-	  finish () {
-	    assert(currentParser === null);
-	    assert(this.ptr != null);
-	    assert(!this.paused);
-
-	    const { llhttp } = this;
-
-	    let ret;
-
-	    try {
-	      currentParser = this;
-	      ret = llhttp.llhttp_finish(this.ptr);
-	    } finally {
-	      currentParser = null;
-	    }
-
-	    if (ret === constants.ERROR.OK) {
-	      return null
-	    }
-
-	    if (ret === constants.ERROR.PAUSED || ret === constants.ERROR.PAUSED_UPGRADE) {
-	      this.paused = true;
-	      return null
-	    }
-
-	    return this.createError(ret, EMPTY_BUF)
-	  }
-
-	  createError (ret, data) {
-	    const { llhttp, contentLength, bytesRead } = this;
-
-	    if (contentLength && bytesRead !== parseInt(contentLength, 10)) {
-	      return new ResponseContentLengthMismatchError()
-	    }
-
-	    const ptr = llhttp.llhttp_get_error_reason(this.ptr);
-	    let message = '';
-	    if (ptr) {
-	      const len = new Uint8Array(llhttp.memory.buffer, ptr).indexOf(0);
-	      message =
-	        'Response does not match the HTTP/1.1 protocol (' +
-	        Buffer.from(llhttp.memory.buffer, ptr, len).toString() +
-	        ')';
-	    }
-
-	    return new HTTPParserError(message, constants.ERROR[ret], data)
 	  }
 
 	  destroy () {
@@ -9099,11 +9046,6 @@ function requireClientH1 () {
 
 	    /* istanbul ignore next: difficult to make a test case for */
 	    if (socket.destroyed) {
-	      return -1
-	    }
-
-	    if (client[kRunning] === 0) {
-	      util.destroy(socket, new SocketError('bad response', util.getSocketInfo(socket)));
 	      return -1
 	    }
 
@@ -9207,11 +9149,6 @@ function requireClientH1 () {
 
 	    /* istanbul ignore next: difficult to make a test case for */
 	    if (socket.destroyed) {
-	      return -1
-	    }
-
-	    if (client[kRunning] === 0) {
-	      util.destroy(socket, new SocketError('bad response', util.getSocketInfo(socket)));
 	      return -1
 	    }
 
@@ -9388,7 +9325,6 @@ function requireClientH1 () {
 	    request.onComplete(headers);
 
 	    client[kQueue][client[kRunningIdx]++] = null;
-	    socket[kSocketUsed] = true;
 
 	    if (socket[kWriting]) {
 	      assert(client[kRunning] === 0);
@@ -9447,9 +9383,6 @@ function requireClientH1 () {
 	  socket[kWriting] = false;
 	  socket[kReset] = false;
 	  socket[kBlocking] = false;
-	  socket[kIdleSocketValidation] = 0;
-	  socket[kIdleSocketValidationTimeout] = null;
-	  socket[kSocketUsed] = false;
 	  socket[kParser] = new Parser(client, socket, llhttpInstance);
 
 	  addListener(socket, 'error', function (err) {
@@ -9460,11 +9393,8 @@ function requireClientH1 () {
 	    // On Mac OS, we get an ECONNRESET even if there is a full body to be forwarded
 	    // to the user.
 	    if (err.code === 'ECONNRESET' && parser.statusCode && !parser.shouldKeepAlive) {
-	      const parserErr = parser.finish();
-	      if (parserErr) {
-	        this[kError] = parserErr;
-	        this[kClient][kOnError](parserErr);
-	      }
+	      // We treat all incoming data so for as a valid response.
+	      parser.onMessageComplete();
 	      return
 	    }
 
@@ -9483,10 +9413,8 @@ function requireClientH1 () {
 	    const parser = this[kParser];
 
 	    if (parser.statusCode && !parser.shouldKeepAlive) {
-	      const parserErr = parser.finish();
-	      if (parserErr) {
-	        util.destroy(this, parserErr);
-	      }
+	      // We treat all incoming data so far as a valid response.
+	      parser.onMessageComplete();
 	      return
 	    }
 
@@ -9496,11 +9424,10 @@ function requireClientH1 () {
 	    const client = this[kClient];
 	    const parser = this[kParser];
 
-	    clearIdleSocketValidation(this);
-
 	    if (parser) {
 	      if (!this[kError] && parser.statusCode && !parser.shouldKeepAlive) {
-	        this[kError] = parser.finish() || this[kError];
+	        // We treat all incoming data so far as a valid response.
+	        parser.onMessageComplete();
 	      }
 
 	      this[kParser].destroy();
@@ -9563,7 +9490,7 @@ function requireClientH1 () {
 	      return socket.destroyed
 	    },
 	    busy (request) {
-	      if (socket[kWriting] || socket[kReset] || socket[kBlocking] || socket[kIdleSocketValidation] === 1) {
+	      if (socket[kWriting] || socket[kReset] || socket[kBlocking]) {
 	        return true
 	      }
 
@@ -9601,31 +9528,6 @@ function requireClientH1 () {
 	  }
 	}
 
-	function clearIdleSocketValidation (socket) {
-	  if (socket[kIdleSocketValidationTimeout]) {
-	    clearTimeout(socket[kIdleSocketValidationTimeout]);
-	    socket[kIdleSocketValidationTimeout] = null;
-	  }
-
-	  socket[kIdleSocketValidation] = 0;
-	}
-
-	function scheduleIdleSocketValidation (client, socket) {
-	  socket[kIdleSocketValidation] = 1;
-	  socket[kIdleSocketValidationTimeout] = setTimeout(() => {
-	    socket[kIdleSocketValidationTimeout] = null;
-	    socket[kIdleSocketValidation] = 2;
-
-	    if (client[kSocket] === socket && !socket.destroyed) {
-	      client[kResume]();
-	    }
-	  }, 0);
-	  socket[kIdleSocketValidationTimeout].unref?.();
-	}
-
-	/**
-	 * @param {import('./client.js')} client
-	 */
 	function resumeH1 (client) {
 	  const socket = client[kSocket];
 
@@ -9638,32 +9540,6 @@ function requireClientH1 () {
 	    } else if (socket[kNoRef] && socket.ref) {
 	      socket.ref();
 	      socket[kNoRef] = false;
-	    }
-
-	    if (client[kRunning] === 0 && client[kPending] > 0 && socket[kSocketUsed]) {
-	      if (socket[kIdleSocketValidation] === 0) {
-	        scheduleIdleSocketValidation(client, socket);
-	        socket[kParser].readMore();
-	        if (socket.destroyed) {
-	          return
-	        }
-	        return
-	      }
-
-	      if (socket[kIdleSocketValidation] === 1) {
-	        socket[kParser].readMore();
-	        if (socket.destroyed) {
-	          return
-	        }
-	        return
-	      }
-	    }
-
-	    if (client[kRunning] === 0) {
-	      socket[kParser].readMore();
-	      if (socket.destroyed) {
-	        return
-	      }
 	    }
 
 	    if (client[kSize] === 0) {
@@ -9759,7 +9635,6 @@ function requireClientH1 () {
 	  }
 
 	  const socket = client[kSocket];
-	  clearIdleSocketValidation(socket);
 
 	  const abort = (err) => {
 	    if (request.aborted || request.completed) {
@@ -11330,10 +11205,9 @@ function requireClient () {
 	    autoSelectFamilyAttemptTimeout,
 	    // h2
 	    maxConcurrentStreams,
-	    allowH2,
-	    webSocket
+	    allowH2
 	  } = {}) {
-	    super({ webSocket });
+	    super();
 
 	    if (keepAlive !== undefined) {
 	      throw new InvalidArgumentError('unsupported keepAlive, use pipelining=0 instead')
@@ -12040,8 +11914,8 @@ function requirePoolBase () {
 	const kStats = Symbol('stats');
 
 	class PoolBase extends DispatcherBase {
-	  constructor (opts) {
-	    super(opts);
+	  constructor () {
+	    super();
 
 	    this[kQueue] = new FixedQueue();
 	    this[kClients] = [];
@@ -12260,6 +12134,8 @@ function requirePool () {
 	    allowH2,
 	    ...options
 	  } = {}) {
+	    super();
+
 	    if (connections != null && (!Number.isFinite(connections) || connections < 0)) {
 	      throw new InvalidArgumentError('invalid connections')
 	    }
@@ -12283,8 +12159,6 @@ function requirePool () {
 	        ...connect
 	      });
 	    }
-
-	    super(options);
 
 	    this[kInterceptors] = options.interceptors?.Pool && Array.isArray(options.interceptors.Pool)
 	      ? options.interceptors.Pool
@@ -12579,6 +12453,8 @@ function requireAgent () {
 
 	class Agent extends DispatcherBase {
 	  constructor ({ factory = defaultFactory, maxRedirections = 0, connect, ...options } = {}) {
+	    super();
+
 	    if (typeof factory !== 'function') {
 	      throw new InvalidArgumentError('factory must be a function.')
 	    }
@@ -12590,8 +12466,6 @@ function requireAgent () {
 	    if (!Number.isInteger(maxRedirections) || maxRedirections < 0) {
 	      throw new InvalidArgumentError('maxRedirections must be a positive number')
 	    }
-
-	    super(options);
 
 	    if (connect && typeof connect !== 'function') {
 	      connect = { ...connect };
@@ -24242,25 +24116,32 @@ function requireParse$1 () {
 	    // If the attribute-name case-insensitively matches the string
 	    // "SameSite", the user agent MUST process the cookie-av as follows:
 
-	    const attributeValueLowercase = attributeValue.toLowerCase();
+	    // 1. Let enforcement be "Default".
+	    let enforcement = 'Default';
 
-	    // 1. If cookie-av's attribute-value is a case-insensitive match for
-	    //    "None", append an attribute to the cookie-attribute-list with an
-	    //    attribute-name of "SameSite" and an attribute-value of "None".
-	    if (attributeValueLowercase === 'none') {
-	      cookieAttributeList.sameSite = 'None';
-	    } else if (attributeValueLowercase === 'strict') {
-	      // 2. If cookie-av's attribute-value is a case-insensitive match for
-	      //    "Strict", append an attribute to the cookie-attribute-list with
-	      //    an attribute-name of "SameSite" and an attribute-value of
-	      //    "Strict".
-	      cookieAttributeList.sameSite = 'Strict';
-	    } else if (attributeValueLowercase === 'lax') {
-	      // 3. If cookie-av's attribute-value is a case-insensitive match for
-	      //    "Lax", append an attribute to the cookie-attribute-list with an
-	      //    attribute-name of "SameSite" and an attribute-value of "Lax".
-	      cookieAttributeList.sameSite = 'Lax';
+	    const attributeValueLowercase = attributeValue.toLowerCase();
+	    // 2. If cookie-av's attribute-value is a case-insensitive match for
+	    //    "None", set enforcement to "None".
+	    if (attributeValueLowercase.includes('none')) {
+	      enforcement = 'None';
 	    }
+
+	    // 3. If cookie-av's attribute-value is a case-insensitive match for
+	    //    "Strict", set enforcement to "Strict".
+	    if (attributeValueLowercase.includes('strict')) {
+	      enforcement = 'Strict';
+	    }
+
+	    // 4. If cookie-av's attribute-value is a case-insensitive match for
+	    //    "Lax", set enforcement to "Lax".
+	    if (attributeValueLowercase.includes('lax')) {
+	      enforcement = 'Lax';
+	    }
+
+	    // 5. Append an attribute to the cookie-attribute-list with an
+	    //    attribute-name of "SameSite" and an attribute-value of
+	    //    enforcement.
+	    cookieAttributeList.sameSite = enforcement;
 	  } else {
 	    cookieAttributeList.unparsed ??= [];
 
@@ -25726,35 +25607,40 @@ function requirePermessageDeflate () {
 	const kBuffer = Symbol('kBuffer');
 	const kLength = Symbol('kLength');
 
+	// Default maximum decompressed message size: 4 MB
+	const kDefaultMaxDecompressedSize = 4 * 1024 * 1024;
+
 	class PerMessageDeflate {
 	  /** @type {import('node:zlib').InflateRaw} */
 	  #inflate
 
 	  #options = {}
 
-	  #maxPayloadSize = 0
+	  /** @type {boolean} */
+	  #aborted = false
+
+	  /** @type {Function|null} */
+	  #currentCallback = null
 
 	  /**
 	   * @param {Map<string, string>} extensions
 	   */
-	  constructor (extensions, options) {
+	  constructor (extensions) {
 	    this.#options.serverNoContextTakeover = extensions.has('server_no_context_takeover');
 	    this.#options.serverMaxWindowBits = extensions.get('server_max_window_bits');
-
-	    this.#maxPayloadSize = options.maxPayloadSize;
 	  }
 
-	  /**
-	   * Decompress a compressed payload.
-	   * @param {Buffer} chunk Compressed data
-	   * @param {boolean} fin Final fragment flag
-	   * @param {Function} callback Callback function
-	   */
 	  decompress (chunk, fin, callback) {
 	    // An endpoint uses the following algorithm to decompress a message.
 	    // 1.  Append 4 octets of 0x00 0x00 0xff 0xff to the tail end of the
 	    //     payload of the message.
 	    // 2.  Decompress the resulting data using DEFLATE.
+
+	    if (this.#aborted) {
+	      callback(new MessageSizeExceededError());
+	      return
+	    }
+
 	    if (!this.#inflate) {
 	      let windowBits = Z_DEFAULT_WINDOWBITS;
 
@@ -25777,12 +25663,23 @@ function requirePermessageDeflate () {
 	      this.#inflate[kLength] = 0;
 
 	      this.#inflate.on('data', (data) => {
+	        if (this.#aborted) {
+	          return
+	        }
+
 	        this.#inflate[kLength] += data.length;
 
-	        if (this.#maxPayloadSize > 0 && this.#inflate[kLength] > this.#maxPayloadSize) {
-	          callback(new MessageSizeExceededError());
+	        if (this.#inflate[kLength] > kDefaultMaxDecompressedSize) {
+	          this.#aborted = true;
 	          this.#inflate.removeAllListeners();
+	          this.#inflate.destroy();
 	          this.#inflate = null;
+
+	          if (this.#currentCallback) {
+	            const cb = this.#currentCallback;
+	            this.#currentCallback = null;
+	            cb(new MessageSizeExceededError());
+	          }
 	          return
 	        }
 
@@ -25795,13 +25692,14 @@ function requirePermessageDeflate () {
 	      });
 	    }
 
+	    this.#currentCallback = callback;
 	    this.#inflate.write(chunk);
 	    if (fin) {
 	      this.#inflate.write(tail);
 	    }
 
 	    this.#inflate.flush(() => {
-	      if (!this.#inflate) {
+	      if (this.#aborted || !this.#inflate) {
 	        return
 	      }
 
@@ -25809,6 +25707,7 @@ function requirePermessageDeflate () {
 
 	      this.#inflate[kBuffer].length = 0;
 	      this.#inflate[kLength] = 0;
+	      this.#currentCallback = null;
 
 	      callback(null, full);
 	    });
@@ -25844,12 +25743,6 @@ function requireReceiver () {
 	const { WebsocketFrameSend } = requireFrame();
 	const { closeWebSocketConnection } = requireConnection();
 	const { PerMessageDeflate } = requirePermessageDeflate();
-	const { MessageSizeExceededError } = requireErrors();
-
-	function failWebsocketConnectionWithCode (ws, code, reason) {
-	  closeWebSocketConnection(ws, code, reason, Buffer.byteLength(reason));
-	  failWebsocketConnection(ws, reason);
-	}
 
 	// This code was influenced by ws released under the MIT license.
 	// Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com>
@@ -25858,7 +25751,6 @@ function requireReceiver () {
 
 	class ByteParser extends Writable {
 	  #buffers = []
-	  #fragmentsBytes = 0
 	  #byteOffset = 0
 	  #loop = false
 
@@ -25870,27 +25762,18 @@ function requireReceiver () {
 	  /** @type {Map<string, PerMessageDeflate>} */
 	  #extensions
 
-	  /** @type {number} */
-	  #maxFragments
-
-	  /** @type {number} */
-	  #maxPayloadSize
-
 	  /**
 	   * @param {import('./websocket').WebSocket} ws
 	   * @param {Map<string, string>|null} extensions
-	   * @param {{ maxFragments?: number, maxPayloadSize?: number }} [options]
 	   */
-	  constructor (ws, extensions, options = {}) {
+	  constructor (ws, extensions) {
 	    super();
 
 	    this.ws = ws;
 	    this.#extensions = extensions == null ? new Map() : extensions;
-	    this.#maxFragments = options.maxFragments ?? 0;
-	    this.#maxPayloadSize = options.maxPayloadSize ?? 0;
 
 	    if (this.#extensions.has('permessage-deflate')) {
-	      this.#extensions.set('permessage-deflate', new PerMessageDeflate(extensions, options));
+	      this.#extensions.set('permessage-deflate', new PerMessageDeflate(extensions));
 	    }
 	  }
 
@@ -25904,19 +25787,6 @@ function requireReceiver () {
 	    this.#loop = true;
 
 	    this.run(callback);
-	  }
-
-	  #validatePayloadLength () {
-	    if (
-	      this.#maxPayloadSize > 0 &&
-	      !isControlFrame(this.#info.opcode) &&
-	      this.#info.payloadLength + this.#fragmentsBytes > this.#maxPayloadSize
-	    ) {
-	      failWebsocketConnectionWithCode(this.ws, 1009, 'Payload size exceeds maximum allowed size');
-	      return false
-	    }
-
-	    return true
 	  }
 
 	  /**
@@ -26007,10 +25877,6 @@ function requireReceiver () {
 	        if (payloadLength <= 125) {
 	          this.#info.payloadLength = payloadLength;
 	          this.#state = parserStates.READ_DATA;
-
-	          if (!this.#validatePayloadLength()) {
-	            return
-	          }
 	        } else if (payloadLength === 126) {
 	          this.#state = parserStates.PAYLOADLENGTH_16;
 	        } else if (payloadLength === 127) {
@@ -26035,10 +25901,6 @@ function requireReceiver () {
 
 	        this.#info.payloadLength = buffer.readUInt16BE(0);
 	        this.#state = parserStates.READ_DATA;
-
-	        if (!this.#validatePayloadLength()) {
-	          return
-	        }
 	      } else if (this.#state === parserStates.PAYLOADLENGTH_64) {
 	        if (this.#byteOffset < 8) {
 	          return callback()
@@ -26061,10 +25923,6 @@ function requireReceiver () {
 
 	        this.#info.payloadLength = lower;
 	        this.#state = parserStates.READ_DATA;
-
-	        if (!this.#validatePayloadLength()) {
-	          return
-	        }
 	      } else if (this.#state === parserStates.READ_DATA) {
 	        if (this.#byteOffset < this.#info.payloadLength) {
 	          return callback()
@@ -26077,58 +25935,42 @@ function requireReceiver () {
 	          this.#state = parserStates.INFO;
 	        } else {
 	          if (!this.#info.compressed) {
-	            if (!this.writeFragments(body)) {
-	              return
-	            }
-
-	            if (this.#maxPayloadSize > 0 && this.#fragmentsBytes > this.#maxPayloadSize) {
-	              failWebsocketConnectionWithCode(this.ws, 1009, new MessageSizeExceededError().message);
-	              return
-	            }
+	            this.#fragments.push(body);
 
 	            // If the frame is not fragmented, a message has been received.
 	            // If the frame is fragmented, it will terminate with a fin bit set
 	            // and an opcode of 0 (continuation), therefore we handle that when
 	            // parsing continuation frames, not here.
 	            if (!this.#info.fragmented && this.#info.fin) {
-	              websocketMessageReceived(this.ws, this.#info.binaryType, this.consumeFragments());
+	              const fullMessage = Buffer.concat(this.#fragments);
+	              websocketMessageReceived(this.ws, this.#info.binaryType, fullMessage);
+	              this.#fragments.length = 0;
 	            }
 
 	            this.#state = parserStates.INFO;
 	          } else {
-	            this.#extensions.get('permessage-deflate').decompress(
-	              body,
-	              this.#info.fin,
-	              (error, data) => {
-	                if (error) {
-	                  const code = error instanceof MessageSizeExceededError ? 1009 : 1007;
-	                  failWebsocketConnectionWithCode(this.ws, code, error.message);
-	                  return
-	                }
-
-	                if (!this.writeFragments(data)) {
-	                  return
-	                }
-
-	                if (this.#maxPayloadSize > 0 && this.#fragmentsBytes > this.#maxPayloadSize) {
-	                  failWebsocketConnectionWithCode(this.ws, 1009, new MessageSizeExceededError().message);
-	                  return
-	                }
-
-	                if (!this.#info.fin) {
-	                  this.#state = parserStates.INFO;
-	                  this.#loop = true;
-	                  this.run(callback);
-	                  return
-	                }
-
-	                websocketMessageReceived(this.ws, this.#info.binaryType, this.consumeFragments());
-
-	                this.#loop = true;
-	                this.#state = parserStates.INFO;
-	                this.run(callback);
+	            this.#extensions.get('permessage-deflate').decompress(body, this.#info.fin, (error, data) => {
+	              if (error) {
+	                failWebsocketConnection(this.ws, error.message);
+	                return
 	              }
-	            );
+
+	              this.#fragments.push(data);
+
+	              if (!this.#info.fin) {
+	                this.#state = parserStates.INFO;
+	                this.#loop = true;
+	                this.run(callback);
+	                return
+	              }
+
+	              websocketMessageReceived(this.ws, this.#info.binaryType, Buffer.concat(this.#fragments));
+
+	              this.#loop = true;
+	              this.#state = parserStates.INFO;
+	              this.#fragments.length = 0;
+	              this.run(callback);
+	            });
 
 	            this.#loop = false;
 	            break
@@ -26178,35 +26020,6 @@ function requireReceiver () {
 	    this.#byteOffset -= n;
 
 	    return buffer
-	  }
-
-	  writeFragments (fragment) {
-	    if (
-	      this.#maxFragments > 0 &&
-	      this.#fragments.length === this.#maxFragments
-	    ) {
-	      failWebsocketConnectionWithCode(this.ws, 1008, 'Too many message fragments');
-	      return false
-	    }
-
-	    this.#fragmentsBytes += fragment.length;
-	    this.#fragments.push(fragment);
-	    return true
-	  }
-
-	  consumeFragments () {
-	    const fragments = this.#fragments;
-
-	    if (fragments.length === 1) {
-	      this.#fragmentsBytes = 0;
-	      return fragments.shift()
-	    }
-
-	    const output = Buffer.concat(fragments, this.#fragmentsBytes);
-	    this.#fragments = [];
-	    this.#fragmentsBytes = 0;
-
-	    return output
 	  }
 
 	  parseCloseBody (data) {
@@ -26894,14 +26707,7 @@ function requireWebsocket () {
 	    // once this happens, the connection is open
 	    this[kResponse] = response;
 
-	    const webSocketOptions = this[kController]?.dispatcher?.webSocketOptions;
-	    const maxFragments = webSocketOptions?.maxFragments;
-	    const maxPayloadSize = webSocketOptions?.maxPayloadSize;
-
-	    const parser = new ByteParser(this, parsedExtensions, {
-	      maxFragments,
-	      maxPayloadSize
-	    });
+	    const parser = new ByteParser(this, parsedExtensions);
 	    parser.on('drain', onParserDrain);
 	    parser.on('error', onParserError.bind(this));
 
@@ -28913,9 +28719,31 @@ var __awaiter$f = (undefined && undefined.__awaiter) || function (thisArg, _argu
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-const { chmod, copyFile, lstat, mkdir, open, readdir, rename, rm, rmdir, stat, symlink, unlink } = fs.promises;
+const { chmod, copyFile: copyFile$1, lstat, mkdir, open, readdir, rename, rm, rmdir, stat, symlink, unlink } = fs.promises;
 // export const {open} = 'fs'
 const IS_WINDOWS$8 = process.platform === 'win32';
+/**
+ * Custom implementation of readlink to ensure Windows junctions
+ * maintain trailing backslash for backward compatibility with Node.js < 24
+ *
+ * In Node.js 20, Windows junctions (directory symlinks) always returned paths
+ * with trailing backslashes. Node.js 24 removed this behavior, which breaks
+ * code that relied on this format for path operations.
+ *
+ * This implementation restores the Node 20 behavior by adding a trailing
+ * backslash to all junction results on Windows.
+ */
+function readlink(fsPath) {
+    return __awaiter$f(this, void 0, void 0, function* () {
+        const result = yield fs.promises.readlink(fsPath);
+        // On Windows, restore Node 20 behavior: add trailing backslash to all results
+        // since junctions on Windows are always directory links
+        if (IS_WINDOWS$8 && !result.endsWith('\\')) {
+            return `${result}\\`;
+        }
+        return result;
+    });
+}
 fs.constants.O_RDONLY;
 function exists(fsPath) {
     return __awaiter$f(this, void 0, void 0, function* () {
@@ -29056,6 +28884,47 @@ var __awaiter$e = (undefined && undefined.__awaiter) || function (thisArg, _argu
     });
 };
 /**
+ * Copies a file or folder.
+ * Based off of shelljs - https://github.com/shelljs/shelljs/blob/9237f66c52e5daa40458f94f9565e18e8132f5a6/src/cp.js
+ *
+ * @param     source    source path
+ * @param     dest      destination path
+ * @param     options   optional. See CopyOptions.
+ */
+function cp(source_1, dest_1) {
+    return __awaiter$e(this, arguments, void 0, function* (source, dest, options = {}) {
+        const { force, recursive, copySourceDirectory } = readCopyOptions(options);
+        const destStat = (yield exists(dest)) ? yield stat(dest) : null;
+        // Dest is an existing file, but not forcing
+        if (destStat && destStat.isFile() && !force) {
+            return;
+        }
+        // If dest is an existing directory, should copy inside.
+        const newDest = destStat && destStat.isDirectory() && copySourceDirectory
+            ? path.join(dest, path.basename(source))
+            : dest;
+        if (!(yield exists(source))) {
+            throw new Error(`no such file or directory: ${source}`);
+        }
+        const sourceStat = yield stat(source);
+        if (sourceStat.isDirectory()) {
+            if (!recursive) {
+                throw new Error(`Failed to copy. ${source} is a directory, but tried to copy without recursive flag.`);
+            }
+            else {
+                yield cpDirRecursive(source, newDest, 0, force);
+            }
+        }
+        else {
+            if (path.relative(source, newDest) === '') {
+                // a file cannot be copied to itself
+                throw new Error(`'${newDest}' and '${source}' are the same file`);
+            }
+            yield copyFile(source, newDest, force);
+        }
+    });
+}
+/**
  * Remove a path recursively with force
  *
  * @param inputPath path to remove
@@ -29183,6 +29052,64 @@ function findInPath(tool) {
             }
         }
         return matches;
+    });
+}
+function readCopyOptions(options) {
+    const force = options.force == null ? true : options.force;
+    const recursive = Boolean(options.recursive);
+    const copySourceDirectory = options.copySourceDirectory == null
+        ? true
+        : Boolean(options.copySourceDirectory);
+    return { force, recursive, copySourceDirectory };
+}
+function cpDirRecursive(sourceDir, destDir, currentDepth, force) {
+    return __awaiter$e(this, void 0, void 0, function* () {
+        // Ensure there is not a run away recursive copy
+        if (currentDepth >= 255)
+            return;
+        currentDepth++;
+        yield mkdirP(destDir);
+        const files = yield readdir(sourceDir);
+        for (const fileName of files) {
+            const srcFile = `${sourceDir}/${fileName}`;
+            const destFile = `${destDir}/${fileName}`;
+            const srcFileStat = yield lstat(srcFile);
+            if (srcFileStat.isDirectory()) {
+                // Recurse
+                yield cpDirRecursive(srcFile, destFile, currentDepth, force);
+            }
+            else {
+                yield copyFile(srcFile, destFile, force);
+            }
+        }
+        // Change the mode for the newly created directory
+        yield chmod(destDir, (yield stat(sourceDir)).mode);
+    });
+}
+// Buffered file copy
+function copyFile(srcFile, destFile, force) {
+    return __awaiter$e(this, void 0, void 0, function* () {
+        if ((yield lstat(srcFile)).isSymbolicLink()) {
+            // unlink/re-link it
+            try {
+                yield lstat(destFile);
+                yield unlink(destFile);
+            }
+            catch (e) {
+                // Try to override file permission
+                if (e.code === 'EPERM') {
+                    yield chmod(destFile, '0666');
+                    yield unlink(destFile);
+                }
+                // other errors = it doesn't exist, no work to do
+            }
+            // Copy over symlink
+            const symlinkFull = yield readlink(srcFile);
+            yield symlink(symlinkFull, destFile, IS_WINDOWS$8 ? 'junction' : null);
+        }
+        else if (!(yield exists(destFile)) || force) {
+            yield copyFile$1(srcFile, destFile);
+        }
     });
 }
 
@@ -29910,6 +29837,27 @@ function addPath(inputPath) {
 function getInput(name, options) {
     const val = process.env[`INPUT_${name.replace(/ /g, '_').toUpperCase()}`] || '';
     return val.trim();
+}
+/**
+ * Gets the input value of the boolean type in the YAML 1.2 "core schema" specification.
+ * Support boolean input list: `true | True | TRUE | false | False | FALSE` .
+ * The return value is also in boolean type.
+ * ref: https://yaml.org/spec/1.2/spec.html#id2804923
+ *
+ * @param     name     name of the input to get
+ * @param     options  optional. See InputOptions.
+ * @returns   boolean
+ */
+function getBooleanInput(name, options) {
+    const trueValue = ['true', 'True', 'TRUE'];
+    const falseValue = ['false', 'False', 'FALSE'];
+    const val = getInput(name);
+    if (trueValue.includes(val))
+        return true;
+    if (falseValue.includes(val))
+        return false;
+    throw new TypeError(`Input does not meet YAML 1.2 "Core Schema" specification: ${name}\n` +
+        `Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
 }
 /**
  * Sets the value of an output.
@@ -32786,7 +32734,7 @@ class HTTPError extends Error {
 }
 const IS_WINDOWS$6 = process.platform === 'win32';
 process.platform === 'darwin';
-const userAgent = 'actions/tool-cache';
+const userAgent$1 = 'actions/tool-cache';
 /**
  * Download a tool from an url and stream it into a file
  *
@@ -32828,7 +32776,7 @@ function downloadToolAttempt(url, dest, auth, headers) {
             throw new Error(`Destination file path ${dest} already exists`);
         }
         // Get the response headers
-        const http = new HttpClient(userAgent, [], {
+        const http = new HttpClient(userAgent$1, [], {
             allowRetries: false
         });
         const response = yield http.get(url, headers);
@@ -33004,6 +32952,93 @@ function extractZipNix(file, dest) {
         yield exec(`"${unzipPath}"`, args, { cwd: dest });
     });
 }
+/**
+ * Caches a directory and installs it into the tool cacheDir
+ *
+ * @param sourceDir    the directory to cache into tools
+ * @param tool          tool name
+ * @param version       version of the tool.  semver format
+ * @param arch          architecture of the tool.  Optional.  Defaults to machine architecture
+ */
+function cacheDir(sourceDir, tool, version, arch) {
+    return __awaiter$a(this, void 0, void 0, function* () {
+        version = semverExports.clean(version) || version;
+        arch = arch || os.arch();
+        debug(`Caching tool ${tool} ${version} ${arch}`);
+        debug(`source dir: ${sourceDir}`);
+        if (!fs.statSync(sourceDir).isDirectory()) {
+            throw new Error('sourceDir is not a directory');
+        }
+        // Create the tool dir
+        const destPath = yield _createToolPath(tool, version, arch);
+        // copy each child item. do not move. move can fail on Windows
+        // due to anti-virus software having an open handle on a file.
+        for (const itemName of fs.readdirSync(sourceDir)) {
+            const s = path.join(sourceDir, itemName);
+            yield cp(s, destPath, { recursive: true });
+        }
+        // write .complete
+        _completeToolPath(tool, version, arch);
+        return destPath;
+    });
+}
+/**
+ * Finds the path to a tool version in the local installed tool cache
+ *
+ * @param toolName      name of the tool
+ * @param versionSpec   version of the tool
+ * @param arch          optional arch.  defaults to arch of computer
+ */
+function find(toolName, versionSpec, arch) {
+    if (!versionSpec) {
+        throw new Error('versionSpec parameter is required');
+    }
+    arch = arch || os.arch();
+    // attempt to resolve an explicit version
+    if (!isExplicitVersion(versionSpec)) {
+        const localVersions = findAllVersions(toolName, arch);
+        const match = evaluateVersions(localVersions, versionSpec);
+        versionSpec = match;
+    }
+    // check for the explicit version in the cache
+    let toolPath = '';
+    if (versionSpec) {
+        versionSpec = semverExports.clean(versionSpec) || '';
+        const cachePath = path.join(_getCacheDirectory(), toolName, versionSpec, arch);
+        debug(`checking cache: ${cachePath}`);
+        if (fs.existsSync(cachePath) && fs.existsSync(`${cachePath}.complete`)) {
+            debug(`Found tool in cache ${toolName} ${versionSpec} ${arch}`);
+            toolPath = cachePath;
+        }
+        else {
+            debug('not found');
+        }
+    }
+    return toolPath;
+}
+/**
+ * Finds the paths to all versions of a tool that are installed in the local tool cache
+ *
+ * @param toolName  name of the tool
+ * @param arch      optional arch.  defaults to arch of computer
+ */
+function findAllVersions(toolName, arch) {
+    const versions = [];
+    arch = arch || os.arch();
+    const toolPath = path.join(_getCacheDirectory(), toolName);
+    if (fs.existsSync(toolPath)) {
+        const children = fs.readdirSync(toolPath);
+        for (const child of children) {
+            if (isExplicitVersion(child)) {
+                const fullPath = path.join(toolPath, child, arch || '');
+                if (fs.existsSync(fullPath) && fs.existsSync(`${fullPath}.complete`)) {
+                    versions.push(child);
+                }
+            }
+        }
+    }
+    return versions;
+}
 function _createExtractFolder(dest) {
     return __awaiter$a(this, void 0, void 0, function* () {
         if (!dest) {
@@ -33013,6 +33048,74 @@ function _createExtractFolder(dest) {
         yield mkdirP(dest);
         return dest;
     });
+}
+function _createToolPath(tool, version, arch) {
+    return __awaiter$a(this, void 0, void 0, function* () {
+        const folderPath = path.join(_getCacheDirectory(), tool, semverExports.clean(version) || version, arch || '');
+        debug(`destination ${folderPath}`);
+        const markerPath = `${folderPath}.complete`;
+        yield rmRF(folderPath);
+        yield rmRF(markerPath);
+        yield mkdirP(folderPath);
+        return folderPath;
+    });
+}
+function _completeToolPath(tool, version, arch) {
+    const folderPath = path.join(_getCacheDirectory(), tool, semverExports.clean(version) || version, arch || '');
+    const markerPath = `${folderPath}.complete`;
+    fs.writeFileSync(markerPath, '');
+    debug('finished caching tool');
+}
+/**
+ * Check if version string is explicit
+ *
+ * @param versionSpec      version string to check
+ */
+function isExplicitVersion(versionSpec) {
+    const c = semverExports.clean(versionSpec) || '';
+    debug(`isExplicit: ${c}`);
+    const valid = semverExports.valid(c) != null;
+    debug(`explicit? ${valid}`);
+    return valid;
+}
+/**
+ * Get the highest satisfiying semantic version in `versions` which satisfies `versionSpec`
+ *
+ * @param versions        array of versions to evaluate
+ * @param versionSpec     semantic version spec to satisfy
+ */
+function evaluateVersions(versions, versionSpec) {
+    let version = '';
+    debug(`evaluating ${versions.length} versions`);
+    versions = versions.sort((a, b) => {
+        if (semverExports.gt(a, b)) {
+            return 1;
+        }
+        return -1;
+    });
+    for (let i = versions.length - 1; i >= 0; i--) {
+        const potential = versions[i];
+        const satisfied = semverExports.satisfies(potential, versionSpec);
+        if (satisfied) {
+            version = potential;
+            break;
+        }
+    }
+    if (version) {
+        debug(`matched: ${version}`);
+    }
+    else {
+        debug('match not found');
+    }
+    return version;
+}
+/**
+ * Gets RUNNER_TOOL_CACHE
+ */
+function _getCacheDirectory() {
+    const cacheDirectory = process.env['RUNNER_TOOL_CACHE'] || '';
+    ok(cacheDirectory, 'Expected RUNNER_TOOL_CACHE to be defined');
+    return cacheDirectory;
 }
 /**
  * Gets RUNNER_TEMP
@@ -77591,1348 +77694,820 @@ function saveCacheV2(paths_1, key_1, options_1) {
     });
 }
 
+var md5File$1 = {exports: {}};
+
+var hasRequiredMd5File;
+
+function requireMd5File () {
+	if (hasRequiredMd5File) return md5File$1.exports;
+	hasRequiredMd5File = 1;
+	const crypto = crypto__default;
+	const fs = fs__default;
+
+	const BUFFER_SIZE = 8192;
+
+	function md5FileSync (path) {
+	  const fd = fs.openSync(path, 'r');
+	  const hash = crypto.createHash('md5');
+	  const buffer = Buffer.alloc(BUFFER_SIZE);
+
+	  try {
+	    let bytesRead;
+
+	    do {
+	      bytesRead = fs.readSync(fd, buffer, 0, BUFFER_SIZE);
+	      hash.update(buffer.slice(0, bytesRead));
+	    } while (bytesRead === BUFFER_SIZE)
+	  } finally {
+	    fs.closeSync(fd);
+	  }
+
+	  return hash.digest('hex')
+	}
+
+	function md5File (path) {
+	  return new Promise((resolve, reject) => {
+	    const output = crypto.createHash('md5');
+	    const input = fs.createReadStream(path);
+
+	    input.on('error', (err) => {
+	      reject(err);
+	    });
+
+	    output.once('readable', () => {
+	      resolve(output.read().toString('hex'));
+	    });
+
+	    input.pipe(output);
+	  })
+	}
+
+	md5File$1.exports = md5File;
+	md5File$1.exports.sync = md5FileSync;
+	return md5File$1.exports;
+}
+
+var md5FileExports = requireMd5File();
+var md5File = /*@__PURE__*/getDefaultExportFromCjs(md5FileExports);
+
 const gccVersions = {
-    '15.3.Rel1': {
-        win32: {
-            url: 'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.3.rel1/arm-gnu-toolchain-15.3.rel1-mingw-w64-x86_64-arm-none-eabi.zip',
-            mirrorUrls: [],
-            md5: null,
-            sha256: 'b85669d3408e2ae713b17b0cc59bc4ea26369a7f2bd19108fd11df7095f159e6',
-        },
-        mac_arm64: {
-            url: 'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.3.rel1/arm-gnu-toolchain-15.3.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            mirrorUrls: [],
-            md5: null,
-            sha256: '376808a59ca209c1413236f1c6a509e33da4b29857ab28642b9927cf3048af55',
-        },
-        linux_x86_64: {
-            url: 'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.3.rel1/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [],
-            md5: null,
-            sha256: '563bebb2b97d53382b956d6ee1fe61e2cae26699901417234a37df505ef9b5fa',
-        },
-        linux_aarch64: {
-            url: 'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.3.rel1/arm-gnu-toolchain-15.3.rel1-aarch64-arm-none-eabi.tar.xz',
-            mirrorUrls: [],
-            md5: null,
-            sha256: '06979e0c8171de58e5dc2a2b2019330a290f30930f27728af98a83e1a7369b3a',
-        },
-    },
     '15.2.Rel1': {
         win32: {
             url: 'https://armkeil.blob.core.windows.net/developer/files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-mingw-w64-x86_64-arm-none-eabi.zip',
-            mirrorUrls: [
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.2.rel1/arm-gnu-toolchain-15.2.rel1-mingw-w64-x86_64-arm-none-eabi.zip',
-            ],
             md5: '88cce5f8c71445cf54dfa1667b3ae6ab',
-            sha256: '7936cac895611023ffb22a64b8e426098c7104cb689778c1894572ca840b9ece',
         },
         mac_arm64: {
             url: 'https://armkeil.blob.core.windows.net/developer/files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.2.rel1/arm-gnu-toolchain-15.2.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            ],
             md5: 'e91fd6348ba0f3e5ec35eeba1ad7e2b8',
-            sha256: '1938a84b7105c192e3fb4fa5e893ba25f425f7ddab40515ae608cd40f68669a8',
         },
         linux_x86_64: {
             url: 'https://armkeil.blob.core.windows.net/developer/files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.2.rel1/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: 'da62bef8821e7fc2a9b5d023871036e0',
-            sha256: '597893282ac8c6ab1a4073977f2362990184599643b4c5ee34870a8215783a16',
         },
         linux_aarch64: {
             url: 'https://armkeil.blob.core.windows.net/developer/files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-aarch64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.2.rel1/arm-gnu-toolchain-15.2.rel1-aarch64-arm-none-eabi.tar.xz',
-            ],
             md5: '458c5d9b362726c9ac20c96f1894ae13',
-            sha256: 'd061559d814b205ed30c5b7c577c03317ec447ca51cd5a159d26b12a5bbeb20c',
         },
     },
     '14.3.Rel1': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-mingw-w64-x86_64-arm-none-eabi.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-mingw-w64-x86_64-arm-none-eabi.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-mingw-w64-x86_64-arm-none-eabi.zip',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/14.3.rel1/arm-gnu-toolchain-14.3.rel1-mingw-w64-x86_64-arm-none-eabi.zip',
-            ],
             md5: 'ab64d0b20882ba164dbca44121c7f216',
-            sha256: '864c0c8815857d68a1bbba2e5e2782255bb922845c71c97636004a3d74f60986',
         },
         mac_arm64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-darwin-arm64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/14.3.rel1/arm-gnu-toolchain-14.3.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            ],
             md5: '1c4a092430c167d08de4b55c6840e46b',
-            sha256: '30f4d08b219190a37cded6aa796f4549504902c53cfc3c7e044a8490b6eba1f7',
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/14.3.rel1/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: '17272b6c72d476c82b692a06ada0636c',
-            sha256: '8f6903f8ceb084d9227b9ef991490413014d991874a1e34074443c2a72b14dbd',
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-aarch64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-aarch64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-aarch64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/14.3.rel1/arm-gnu-toolchain-14.3.rel1-aarch64-arm-none-eabi.tar.xz',
-            ],
             md5: '5b44bdd1d983247ec153fe548b4ff8ed',
-            sha256: '2d465847eb1d05f876270494f51034de9ace9abe87a4222d079f3360240184d3',
         },
     },
     '14.2.Rel1': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-mingw-w64-x86_64-arm-none-eabi.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-mingw-w64-x86_64-arm-none-eabi.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-mingw-w64-x86_64-arm-none-eabi.zip',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/14.2.rel1/arm-gnu-toolchain-14.2.rel1-mingw-w64-x86_64-arm-none-eabi.zip',
-            ],
             md5: '7426b9eec8b576f0a524ede63013c547',
-            sha256: 'f074615953f76036e9a51b87f6577fdb4ed8e77d3322a6f68214e92e7859888f',
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-darwin-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/14.2.rel1/arm-gnu-toolchain-14.2.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: 'd5fb1ae60e4d67eb2986837dbcd6a066',
-            sha256: '2d9e717dd4f7751d18936ae1365d25916534105ebcb7583039eff1092b824505',
         },
         mac_arm64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-darwin-arm64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/14.2.rel1/arm-gnu-toolchain-14.2.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            ],
             md5: '40d1c9208aed7fab08b0f27e5383dcef',
-            sha256: 'c7c78ffab9bebfce91d99d3c24da6bf4b81c01e16cf551eb2ff9f25b9e0a3818',
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/14.2.rel1/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: 'fcdcd7c8d5b22d2d0cc6bf3721686e69',
-            sha256: '62a63b981fe391a9cbad7ef51b17e49aeaa3e7b0d029b36ca1e9c3b2a9b78823',
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-aarch64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-aarch64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-aarch64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/14.2.rel1/arm-gnu-toolchain-14.2.rel1-aarch64-arm-none-eabi.tar.xz',
-            ],
             md5: '342d6d9dc75e6d4c05a748f2cecc96a6',
-            sha256: '87330bab085dd8749d4ed0ad633674b9dc48b237b61069e3b481abd364d0a684',
         },
     },
     '13.3.Rel1': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-mingw-w64-i686-arm-none-eabi.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-mingw-w64-i686-arm-none-eabi.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-mingw-w64-i686-arm-none-eabi.zip',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/13.3.rel1/arm-gnu-toolchain-13.3.rel1-mingw-w64-i686-arm-none-eabi.zip',
-            ],
             md5: '39d9882ca0eb475e81170ae826c1435d',
-            sha256: 'e46fda043c0ce83582bc8db4b3ef85f77f4beb7333344c2f4193c17e1167a095',
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/13.3.rel1/arm-gnu-toolchain-13.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: '4bb141e44b831635fde4e8139d470f1f',
-            sha256: '1ab00742d1ed0926e6f227df39d767f8efab46f5250505c29cb81f548222d794',
         },
         mac_arm64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-darwin-arm64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/13.3.rel1/arm-gnu-toolchain-13.3.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            ],
             md5: 'f1c18320bb3121fa89dca11399273f4e',
-            sha256: 'fb6921db95d345dc7e5e487dd43b745e3a5b4d5c0c7ca4f707347148760317b4',
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/13.3.rel1/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: '0601a9588bc5b9c99ad2b56133b7f118',
-            sha256: '95c011cee430e64dd6087c75c800f04b9c49832cc1000127a92a97f9c8d83af4',
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-aarch64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-aarch64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-aarch64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/13.3.rel1/arm-gnu-toolchain-13.3.rel1-aarch64-arm-none-eabi.tar.xz',
-            ],
             md5: '303102d97b877ebbeb36b3158994b218',
-            sha256: 'c8824bffd057afce2259f7618254e840715f33523a3d4e4294f471208f976764',
         },
     },
     '13.2.Rel1': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-mingw-w64-i686-arm-none-eabi.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-mingw-w64-i686-arm-none-eabi.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-mingw-w64-i686-arm-none-eabi.zip',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/13.2.Rel1/arm-gnu-toolchain-13.2.Rel1-mingw-w64-i686-arm-none-eabi.zip',
-            ],
             md5: '7fd677088038cdf82f33f149e2e943ee',
-            sha256: '51d933f00578aa28016c5e3c84f94403274ea7915539f8e56c13e2196437d18f',
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-darwin-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/13.2.Rel1/arm-gnu-toolchain-13.2.Rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: '41d49840b0fc676d2ae35aab21a58693',
-            sha256: '075faa4f3e8eb45e59144858202351a28706f54a6ec17eedd88c9fb9412372cc',
         },
         mac_arm64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-darwin-arm64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/13.2.Rel1/arm-gnu-toolchain-13.2.Rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            ],
             md5: '2c43e9d72206c1f81227b0a685df5ea6',
-            sha256: '39c44f8af42695b7b871df42e346c09fee670ea8dfc11f17083e296ea2b0d279',
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/13.2.Rel1/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: '791754852f8c18ea04da7139f153a5b7',
-            sha256: '6cd1bbc1d9ae57312bcd169ae283153a9572bd6a8e4eeae2fedfbc33b115fdbb',
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-aarch64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-aarch64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-aarch64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/13.2.Rel1/arm-gnu-toolchain-13.2.Rel1-aarch64-arm-none-eabi.tar.xz',
-            ],
             md5: '5a08122e6d4caf97c6ccd1d29e62599c',
-            sha256: '8fd8b4a0a8d44ab2e195ccfbeef42223dfb3ede29d80f14dcf2183c34b8d199a',
         },
     },
     '12.3.Rel1': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-mingw-w64-i686-arm-none-eabi.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-mingw-w64-i686-arm-none-eabi.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-mingw-w64-i686-arm-none-eabi.zip',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/12.3.rel1/arm-gnu-toolchain-12.3.rel1-mingw-w64-i686-arm-none-eabi.zip',
-            ],
             md5: '36c3f864ae8a4ded4a464e67c74f4973',
-            sha256: 'd52888bf59c5262ebf3e6b19b9f9e6270ecb60fd218cf81a4e793946e805a654',
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-                // A 2026 GitLab mirror exists but its checksum differs from the original file, so it is not added here
-            ],
             md5: '13ae2cc016564507c91a4fcffb6e3c54',
-            sha256: 'e6ed8bf930fad9ce33e120ab90b36957b1f779fccaa6de6c9ca9a58982c04291',
         },
         mac_arm64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-darwin-arm64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-                // A 2026 GitLab mirror exists but its checksum differs from the original file, so it is not added here
-            ],
             md5: '53d034e9423e7f470acc5ed2a066758e',
-            sha256: '3b2eee0bdf71c1bbeb3c3b7424fbf7bd9d5c3f0f5a3a4a78159c9e3ad219e7bd',
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-x86_64-arm-none-eabi.tar.xz',
-                // A 2026 GitLab mirror exists but its checksum differs from the original file, so it is not added here
-            ],
             md5: '00ebb1b70b1f88906c61206457eacb61',
-            sha256: '12a2815644318ebcceaf84beabb665d0924b6e79e21048452c5331a56332b309',
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-aarch64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-aarch64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-aarch64-arm-none-eabi.tar.xz',
-                // A 2026 GitLab mirror exists but its checksum differs from the original file, so it is not added here
-            ],
             md5: '02c9b0d3bb1110575877d8eee1f223f2',
-            sha256: '14c0487d5753f6071d24e568881f7c7e67f80dd83165dec5164b3731394af431',
         },
     },
     '12.2.Rel1': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-mingw-w64-i686-arm-none-eabi.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-mingw-w64-i686-arm-none-eabi.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-mingw-w64-i686-arm-none-eabi.zip',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/12.2.rel1/arm-gnu-toolchain-12.2.rel1-mingw-w64-i686-arm-none-eabi.zip',
-            ],
             md5: '0122a821c28b200f251cd23d2edc38c5',
-            sha256: 'ad1427496cde9bbe7604bc448ec6e115c6538e04af1c8275795ebb1c2b7b2830',
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-darwin-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/12.2.rel1/arm-gnu-toolchain-12.2.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: 'b98c6f58a4ccf64c38f92b456eb3b3d1',
-            sha256: '00c0eeb57ae92332f216151ac66df6ba17d2d3b306dac86f4006006f437b2902',
         },
         mac_arm64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-darwin-arm64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/12.2.rel1/arm-gnu-toolchain-12.2.rel1-darwin-arm64-arm-none-eabi.tar.xz',
-            ],
             md5: '26329762f802bb53ac73385d85b11646',
-            sha256: '21a9e875250bcb0db8df4cb23dd43c94c00a1d3b98ecba9cdd6ed51586b12248',
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-x86_64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/12.2.rel1/arm-gnu-toolchain-12.2.rel1-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: 'f3d1d32c8ac58f1e0f9dbe4bc56efa05',
-            sha256: '84be93d0f9e96a15addd490b6e237f588c641c8afdf90e7610a628007fc96867',
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-aarch64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-aarch64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-aarch64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/12.2.rel1/arm-gnu-toolchain-12.2.rel1-aarch64-arm-none-eabi.tar.xz',
-            ],
             md5: '2014a0ebaae3168da555efdcabf03f2a',
-            sha256: '7ee332f7558a984e239e768a13aed86c6c3ac85c90b91d27f4ed38d7ec6b3e8c',
         },
     },
     '11.3.Rel1': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-mingw-w64-i686-arm-none-eabi.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-mingw-w64-i686-arm-none-eabi.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-mingw-w64-i686-arm-none-eabi.zip',
-                // A 2026 GitLab mirror exists but its checksum differs from the original file, so it is not added here
-            ],
             // Arm's published MD5 seems incorrect: f1ff0b48304dbc4ff558f0753a3a8860
             // https://community.arm.com/support-forums/f/compilers-and-libraries-forum/53343/arm-gnu-toolchain-11-3-rel1-windows-arm-none-eabi-md5-is-incorrect
             md5: 'b287cf60045910dd56c56cdc2a490049',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/11.3.rel1/arm-gnu-toolchain-11.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: 'f4a3df0bff51bf872db679c406a9154d',
-            sha256: '826353d45e7fbaa9b87c514e7c758a82f349cb7fc3fd949423687671539b29cf',
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-x86_64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/11.3.rel1/arm-gnu-toolchain-11.3.rel1-x86_64-arm-none-eabi.tar.xz',
-            ],
             md5: '8cb33f7ec29682f2f9cdc0b4e687f9a6',
-            sha256: 'd420d87f68615d9163b99bbb62fe69e85132dc0a8cd69fca04e813597fe06121',
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-aarch64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-aarch64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-aarch64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/11.3.rel1/arm-gnu-toolchain-11.3.rel1-aarch64-arm-none-eabi.tar.xz',
-            ],
             md5: 'f020e29a861c5dbf199dce93643d68cc',
-            sha256: '6c713c11d018dcecc16161f822517484a13af151480bbb722badd732412eb55e',
         },
     },
     '11.2-2022.02': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-mingw-w64-i686-arm-none-eabi.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-mingw-w64-i686-arm-none-eabi.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-mingw-w64-i686-arm-none-eabi.zip',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/11.2-2022.02/gcc-arm-11.2-2022.02-mingw-w64-i686-arm-none-eabi.zip',
-            ],
             md5: 'e2bb05445200ed8e8c9140fad6a0afb5',
-            sha256: '585156432d73c9c2c8b4742e342564a75d47886d90ac821f88d2b564c33e6766',
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-darwin-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-darwin-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-darwin-x86_64-arm-none-eabi.tar.xz',
-                // A 2026 GitLab mirror exists but its checksum differs from the original file, so it is not added here
-            ],
             md5: 'c51d8257b67d7555047f172698730685',
-            sha256: '31d6d3b400db89e204ab1a7ff3f4bb6230d2cdf5a551514ae9deedeebbb07bac',
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-x86_64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-x86_64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-x86_64-arm-none-eabi.tar.xz',
-                // A 2026 GitLab mirror exists but its checksum differs from the original file, so it is not added here
-            ],
             md5: 'a48e6f8756be70b071535048a678c481',
-            sha256: '8c5acd5ae567c0100245b0556941c237369f210bceb196edfe5a2e7532c60326',
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-aarch64-arm-none-eabi.tar.xz
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-aarch64-arm-none-eabi.tar.xz',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu/11.2-2022.02/binrel/gcc-arm-11.2-2022.02-aarch64-arm-none-eabi.tar.xz',
-                // 2026 new GitLab location
-                'https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/11.2-2022.02/gcc-arm-11.2-2022.02-aarch64-arm-none-eabi.tar.xz',
-            ],
             md5: '746f20d2eb8acad4e7085e1395665219',
-            sha256: 'ef1d82e5894e3908cb7ed49c5485b5b95deefa32872f79c2b5f6f5447cabf55f',
         },
     },
     '10.3-2021.10': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-win32.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-win32.zip',
-            ],
             md5: '2bc8f0c4c4659f8259c8176223eeafc1',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-mac.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-mac.tar.bz2',
-            ],
             md5: '7f2a7b7b23797302a9d6182c6e482449',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2',
-            ],
             md5: '2383e4eb4ea23f248d33adc70dc3227e',
-            sha256: null,
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-aarch64-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-aarch64-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-aarch64-linux.tar.bz2',
-            ],
             md5: '3fe3d8bb693bd0a6e4615b6569443d0d',
-            sha256: null,
         },
     },
     '10.3-2021.07': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-win32.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-win32.zip',
-            ],
             md5: 'fca12668002f8c52cfa174400fd2d03e',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-mac-10.14.6.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-mac-10.14.6.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-mac-10.14.6.tar.bz2',
-            ],
             md5: '42d5f143cdc303d73a3602fa5052c790',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-x86_64-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-x86_64-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-x86_64-linux.tar.bz2',
-            ],
             md5: 'b56ae639d9183c340f065ae114a30202',
-            sha256: null,
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-aarch64-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-aarch64-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.07/gcc-arm-none-eabi-10.3-2021.07-aarch64-linux.tar.bz2',
-            ],
             md5: 'c20b0535d01f8d4418341d893c62a782',
-            sha256: null,
         },
     },
     '10-2020-q4': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-win32.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-win32.zip',
-            ],
             md5: '5ee6542a2af847934177bc8fa1294c0d',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-mac.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-mac.tar.bz2',
-            ],
             md5: 'e588d21be5a0cc9caa60938d2422b058',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-x86_64-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-x86_64-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-x86_64-linux.tar.bz2',
-            ],
             md5: '8312c4c91799885f222f663fc81f9a31',
-            sha256: null,
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-aarch64-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-aarch64-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-aarch64-linux.tar.bz2',
-            ],
             md5: '1c3b8944c026d50362eef1f01f329a8e',
-            sha256: null,
         },
     },
     '9-2020-q2': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-win32.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-win32.zip',
-            ],
             md5: '184b3397414485f224e7ba950989aab6',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-mac.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-mac.tar.bz2',
-            ],
             md5: '75a171beac35453fd2f0f48b3cb239c3',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-x86_64-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-x86_64-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-x86_64-linux.tar.bz2',
-            ],
             md5: '2b9eeccc33470f9d3cda26983b9d2dc6',
-            sha256: null,
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-aarch64-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-aarch64-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-aarch64-linux.tar.bz2',
-            ],
             md5: '000b0888cbe7b171e2225b29be1c327c',
-            sha256: null,
         },
     },
     '9-2019-q4': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-win32.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-win32.zip',
-            ],
             md5: '82525522fefbde0b7811263ee8172b10',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-mac.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-mac.tar.bz2',
-            ],
             md5: '241b64f0578db2cf146034fc5bcee3d4',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-x86_64-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-x86_64-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-x86_64-linux.tar.bz2',
-            ],
             md5: 'fe0029de4f4ec43cf7008944e34ff8cc',
-            sha256: null,
         },
         linux_aarch64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-aarch64-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-aarch64-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-aarch64-linux.tar.bz2',
-            ],
             md5: '0dfa059aae18fcf7d842e30c525076a4',
-            sha256: null,
         },
     },
     '8-2019-q3': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2019q3/RC1.1/gcc-arm-none-eabi-8-2019-q3-update-win32.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/8-2019q3/RC1.1/gcc-arm-none-eabi-8-2019-q3-update-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2019q3/RC1.1/gcc-arm-none-eabi-8-2019-q3-update-win32.zip',
-            ],
             md5: '5fa382a547abe0b0d5c0a6e9eaa75c7b',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2019q3/RC1.1/gcc-arm-none-eabi-8-2019-q3-update-mac.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/8-2019q3/RC1.1/gcc-arm-none-eabi-8-2019-q3-update-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2019q3/RC1.1/gcc-arm-none-eabi-8-2019-q3-update-mac.tar.bz2',
-            ],
             md5: '405cfbe54cee25a1b925ad0657f73924',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2019q3/RC1.1/gcc-arm-none-eabi-8-2019-q3-update-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/8-2019q3/RC1.1/gcc-arm-none-eabi-8-2019-q3-update-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2019q3/RC1.1/gcc-arm-none-eabi-8-2019-q3-update-linux.tar.bz2',
-            ],
             md5: '6341f11972dac8de185646d0fbd73bfc',
-            sha256: null,
         },
     },
     '8-2018-q4': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2018q4/gcc-arm-none-eabi-8-2018-q4-major-win32.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/8-2018q4/gcc-arm-none-eabi-8-2018-q4-major-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2018q4/gcc-arm-none-eabi-8-2018-q4-major-win32.zip',
-            ],
             md5: '9b1cfb7539af11b0badfaa960679ea6f',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2018q4/gcc-arm-none-eabi-8-2018-q4-major-mac.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/8-2018q4/gcc-arm-none-eabi-8-2018-q4-major-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2018q4/gcc-arm-none-eabi-8-2018-q4-major-mac.tar.bz2',
-            ],
             md5: '4c0d86df0244df22bc783f83df886db9',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2018q4/gcc-arm-none-eabi-8-2018-q4-major-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/8-2018q4/gcc-arm-none-eabi-8-2018-q4-major-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/8-2018q4/gcc-arm-none-eabi-8-2018-q4-major-linux.tar.bz2',
-            ],
             md5: 'f55f90d483ddb3bcf4dae5882c2094cd',
-            sha256: null,
         },
     },
     '7-2018-q2': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2018q2/gcc-arm-none-eabi-7-2018-q2-update-win32.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/7-2018q2/gcc-arm-none-eabi-7-2018-q2-update-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2018q2/gcc-arm-none-eabi-7-2018-q2-update-win32.zip',
-            ],
             md5: 'bc8ae26d7c429f30d583a605a4bcf9bc',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2018q2/gcc-arm-none-eabi-7-2018-q2-update-mac.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/7-2018q2/gcc-arm-none-eabi-7-2018-q2-update-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2018q2/gcc-arm-none-eabi-7-2018-q2-update-mac.tar.bz2',
-            ],
             md5: 'a66be9828cf3c57d7d21178e07cd8904',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2018q2/gcc-arm-none-eabi-7-2018-q2-update-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/7-2018q2/gcc-arm-none-eabi-7-2018-q2-update-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2018q2/gcc-arm-none-eabi-7-2018-q2-update-linux.tar.bz2',
-            ],
             md5: '299ebd3f1c2c90930d28ab82e5d8d6c0',
-            sha256: null,
         },
     },
     '7-2017-q4': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2017q4/gcc-arm-none-eabi-7-2017-q4-major-win32.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/7-2017q4/gcc-arm-none-eabi-7-2017-q4-major-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2017q4/gcc-arm-none-eabi-7-2017-q4-major-win32.zip',
-            ],
             md5: '168c68c41ee0986ecc1dadceaa8b6a3f',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2017q4/gcc-arm-none-eabi-7-2017-q4-major-mac.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/7-2017q4/gcc-arm-none-eabi-7-2017-q4-major-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2017q4/gcc-arm-none-eabi-7-2017-q4-major-mac.tar.bz2',
-            ],
             md5: '1ec5bed45d78788723036f22c4e83ba8',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2017q4/gcc-arm-none-eabi-7-2017-q4-major-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/7-2017q4/gcc-arm-none-eabi-7-2017-q4-major-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2017q4/gcc-arm-none-eabi-7-2017-q4-major-linux.tar.bz2',
-            ],
             md5: 'd3b00ae09e847747ef11316a8b04989a',
-            sha256: null,
         },
     },
     '6-2017-q2': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2017q2/gcc-arm-none-eabi-6-2017-q2-update-win32.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/6-2017q2/gcc-arm-none-eabi-6-2017-q2-update-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2017q2/gcc-arm-none-eabi-6-2017-q2-update-win32.zip',
-            ],
             md5: 'df6c2f763a6114c951e3f1e509af3cbc',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2017q2/gcc-arm-none-eabi-6-2017-q2-update-mac.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/6-2017q2/gcc-arm-none-eabi-6-2017-q2-update-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2017q2/gcc-arm-none-eabi-6-2017-q2-update-mac.tar.bz2',
-            ],
             md5: 'd536d7fb167c04b24f7f0d40cd739cac',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2017q2/gcc-arm-none-eabi-6-2017-q2-update-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/6-2017q2/gcc-arm-none-eabi-6-2017-q2-update-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2017q2/gcc-arm-none-eabi-6-2017-q2-update-linux.tar.bz2',
-            ],
             md5: '13747255194398ee08b3ba42e40e9465',
-            sha256: null,
         },
     },
     '6-2017-q1': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/6_1-2017q1/gcc-arm-none-eabi-6-2017-q1-update-win32-zip.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/6_1-2017q1/gcc-arm-none-eabi-6-2017-q1-update-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/6_1-2017q1/gcc-arm-none-eabi-6-2017-q1-update-win32-zip.zip',
-            ],
             md5: 'ec8b98945d4faf0c28a05bcdc1c2e537', // This MD5 was calculated by me instead of coming from Arm
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/6_1-2017q1/gcc-arm-none-eabi-6-2017-q1-update-mac.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/6_1-2017q1/gcc-arm-none-eabi-6-2017-q1-update-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/6_1-2017q1/gcc-arm-none-eabi-6-2017-q1-update-mac.tar.bz2',
-            ],
             md5: '709c86af4c92d17bd5fb9dcfe00ffd6d', // This MD5 was calculated by me instead of coming from Arm
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/6_1-2017q1/gcc-arm-none-eabi-6-2017-q1-update-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/6_1-2017q1/gcc-arm-none-eabi-6-2017-q1-update-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/6_1-2017q1/gcc-arm-none-eabi-6-2017-q1-update-linux.tar.bz2',
-            ],
             md5: '30004c24f4632bc594952462bb0cd1c9', // This MD5 was calculated by me instead of coming from Arm
-            sha256: null,
         },
     },
     '6-2016-q4': {
         win32: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2016q4/gcc-arm-none-eabi-6_2-2016q4-20161216-win32-zip.zip
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/6-2016q4/gcc-arm-none-eabi-6_2-2016q4-20161216-win32.zip',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2016q4/gcc-arm-none-eabi-6_2-2016q4-20161216-win32-zip.zip',
-            ],
             md5: '6aa8f5795abf176190b9eef9a9f34ef1', // This MD5 was calculated by me instead of coming from Arm
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2016q4/gcc-arm-none-eabi-6_2-2016q4-20161216-mac.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/6-2016q4/gcc-arm-none-eabi-6_2-2016q4-20161216-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2016q4/gcc-arm-none-eabi-6_2-2016q4-20161216-mac.tar.bz2',
-            ],
             md5: 'dff94a68a97ba8526a825254c336d660', // This MD5 was calculated by me instead of coming from Arm
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2016q4/gcc-arm-none-eabi-6_2-2016q4-20161216-linux.tar.bz2
             url: 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu-rm/6-2016q4/gcc-arm-none-eabi-6_2-2016q4-20161216-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original developer.arm.com URL, which redirects to the address set to url
-                'https://developer.arm.com/-/media/Files/downloads/gnu-rm/6-2016q4/gcc-arm-none-eabi-6_2-2016q4-20161216-linux.tar.bz2',
-            ],
             md5: '8986a0d41a8e4c92e8a64487d8b0eac7', // This MD5 was calculated by me instead of coming from Arm
-            sha256: null,
         },
     },
     '5-2016-q3': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q3-update/+download/gcc-arm-none-eabi-5_4-2016q3-20160926-win32.zip
             url: 'https://launchpadlibrarian.net/287101634/gcc-arm-none-eabi-5_4-2016q3-20160926-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q3-update/+download/gcc-arm-none-eabi-5_4-2016q3-20160926-win32.zip',
-            ],
             md5: 'dd46badbea382c884dd7079dcc5b4e0d',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q3-update/+download/gcc-arm-none-eabi-5_4-2016q3-20160926-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/287101378/gcc-arm-none-eabi-5_4-2016q3-20160926-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q3-update/+download/gcc-arm-none-eabi-5_4-2016q3-20160926-mac.tar.bz2',
-            ],
             md5: '968ef87c0c03372aa933bab31d6789af',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q3-update/+download/gcc-arm-none-eabi-5_4-2016q3-20160926-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/287101520/gcc-arm-none-eabi-5_4-2016q3-20160926-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q3-update/+download/gcc-arm-none-eabi-5_4-2016q3-20160926-linux.tar.bz2',
-            ],
             md5: 'f7004b904541c09a8a0a7a52883c9e5b',
-            sha256: null,
         },
     },
     '5-2016-q2': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q2-update/+download/gcc-arm-none-eabi-5_4-2016q2-20160622-win32.zip
             url: 'https://launchpadlibrarian.net/268330601/gcc-arm-none-eabi-5_4-2016q2-20160622-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q2-update/+download/gcc-arm-none-eabi-5_4-2016q2-20160622-win32.zip',
-            ],
             md5: '3f3ba8772ccf9bccdb3f897cc5569aaa',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q2-update/+download/gcc-arm-none-eabi-5_4-2016q2-20160622-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/268330406/gcc-arm-none-eabi-5_4-2016q2-20160622-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q2-update/+download/gcc-arm-none-eabi-5_4-2016q2-20160622-mac.tar.bz2',
-            ],
             md5: 'bb2c7501a2d6a6e517267197f4c069e6',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q2-update/+download/gcc-arm-none-eabi-5_4-2016q2-20160622-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/268330503/gcc-arm-none-eabi-5_4-2016q2-20160622-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q2-update/+download/gcc-arm-none-eabi-5_4-2016q2-20160622-linux.tar.bz2',
-            ],
             md5: '47b26ff8e4eb2c91af615dd73ada0c50',
-            sha256: null,
         },
     },
     '5-2016-q1': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q1-update/+download/gcc-arm-none-eabi-5_3-2016q1-20160330-win32.zip
             url: 'https://launchpadlibrarian.net/251688125/gcc-arm-none-eabi-5_3-2016q1-20160330-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q1-update/+download/gcc-arm-none-eabi-5_3-2016q1-20160330-win32.zip',
-            ],
             md5: '1ea9a1b83666a5a363018fba8a088879',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q1-update/+download/gcc-arm-none-eabi-5_3-2016q1-20160330-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/251687676/gcc-arm-none-eabi-5_3-2016q1-20160330-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q1-update/+download/gcc-arm-none-eabi-5_3-2016q1-20160330-mac.tar.bz2',
-            ],
             md5: 'aa60d23587dc7456c79a7e39acdafe0b',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q1-update/+download/gcc-arm-none-eabi-5_3-2016q1-20160330-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/251687888/gcc-arm-none-eabi-5_3-2016q1-20160330-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2016-q1-update/+download/gcc-arm-none-eabi-5_3-2016q1-20160330-linux.tar.bz2',
-            ],
             md5: '5a261cac18c62d8b7e8c70beba2004bd',
-            sha256: null,
         },
     },
     '5-2015-q4': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2015-q4-major/+download/gcc-arm-none-eabi-5_2-2015q4-20151219-win32.zip
             url: 'https://launchpadlibrarian.net/231143489/gcc-arm-none-eabi-5_2-2015q4-20151219-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2015-q4-major/+download/gcc-arm-none-eabi-5_2-2015q4-20151219-win32.zip',
-            ],
             md5: '5b513d3453ecd5e2034eeb951a79607f',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2015-q4-major/+download/gcc-arm-none-eabi-5_2-2015q4-20151219-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/231140334/gcc-arm-none-eabi-5_2-2015q4-20151219-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2015-q4-major/+download/gcc-arm-none-eabi-5_2-2015q4-20151219-mac.tar.bz2',
-            ],
             md5: '603bcce8e59683ac27054b3197a53254',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/5.0/5-2015-q4-major/+download/gcc-arm-none-eabi-5_2-2015q4-20151219-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/231142403/gcc-arm-none-eabi-5_2-2015q4-20151219-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/5.0/5-2015-q4-major/+download/gcc-arm-none-eabi-5_2-2015q4-20151219-linux.tar.bz2',
-            ],
             md5: 'f88caac80b4444a17344f57ccb760b90',
-            sha256: null,
         },
     },
     '4.9-2015-q3': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q3-update/+download/gcc-arm-none-eabi-4_9-2015q3-20150921-win32.zip
             url: 'https://launchpadlibrarian.net/218827522/gcc-arm-none-eabi-4_9-2015q3-20150921-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q3-update/+download/gcc-arm-none-eabi-4_9-2015q3-20150921-win32.zip',
-            ],
             md5: 'd944be40a5bdb2327d80db23290c6b9d',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q3-update/+download/gcc-arm-none-eabi-4_9-2015q3-20150921-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/218827447/gcc-arm-none-eabi-4_9-2015q3-20150921-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q3-update/+download/gcc-arm-none-eabi-4_9-2015q3-20150921-mac.tar.bz2',
-            ],
             md5: '7886163ba5a1c17b560939e3dcf1382b',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q3-update/+download/gcc-arm-none-eabi-4_9-2015q3-20150921-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/218827486/gcc-arm-none-eabi-4_9-2015q3-20150921-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q3-update/+download/gcc-arm-none-eabi-4_9-2015q3-20150921-linux.tar.bz2',
-            ],
             md5: '8a4a74872830f80c788c944877d3ad8c',
-            sha256: null,
         },
     },
     '4.9-2015-q2': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q2-update/+download/gcc-arm-none-eabi-4_9-2015q2-20150609-win32.zip
             url: 'https://launchpadlibrarian.net/209776218/gcc-arm-none-eabi-4_9-2015q2-20150609-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q2-update/+download/gcc-arm-none-eabi-4_9-2015q2-20150609-win32.zip',
-            ],
             md5: '2e5812e1a7786adeb8461f17b2a6e6dc',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q2-update/+download/gcc-arm-none-eabi-4_9-2015q2-20150609-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/209776104/gcc-arm-none-eabi-4_9-2015q2-20150609-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q2-update/+download/gcc-arm-none-eabi-4_9-2015q2-20150609-mac.tar.bz2',
-            ],
             md5: '34904f10367d622c139c782063212cd9',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q2-update/+download/gcc-arm-none-eabi-4_9-2015q2-20150609-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/209776202/gcc-arm-none-eabi-4_9-2015q2-20150609-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q2-update/+download/gcc-arm-none-eabi-4_9-2015q2-20150609-linux.tar.bz2',
-            ],
             md5: '6d5e1ae27607bab87bd324c9be2df17a',
-            sha256: null,
         },
     },
     '4.9-2015-q1': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q1-update/+download/gcc-arm-none-eabi-4_9-2015q1-20150306-win32.zip
             url: 'https://launchpadlibrarian.net/200701725/gcc-arm-none-eabi-4_9-2015q1-20150306-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q1-update/+download/gcc-arm-none-eabi-4_9-2015q1-20150306-win32.zip',
-            ],
             md5: 'ef2df916f1ea4c5cc1022fa9aaf338a1',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q1-update/+download/gcc-arm-none-eabi-4_9-2015q1-20150306-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/200700934/gcc-arm-none-eabi-4_9-2015q1-20150306-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q1-update/+download/gcc-arm-none-eabi-4_9-2015q1-20150306-mac.tar.bz2',
-            ],
             md5: 'e3d92e5eaac7f9b0c20bf69822a434dd',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q1-update/+download/gcc-arm-none-eabi-4_9-2015q1-20150306-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/200701245/gcc-arm-none-eabi-4_9-2015q1-20150306-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2015-q1-update/+download/gcc-arm-none-eabi-4_9-2015q1-20150306-linux.tar.bz2',
-            ],
             md5: '68f5928cdfb990691ea53246c56f6720',
-            sha256: null,
         },
     },
     '4.9-2014-q4': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2014-q4-major/+download/gcc-arm-none-eabi-4_9-2014q4-20141203-win32.zip
             url: 'https://launchpadlibrarian.net/192228054/gcc-arm-none-eabi-4_9-2014q4-20141203-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2014-q4-major/+download/gcc-arm-none-eabi-4_9-2014q4-20141203-win32.zip',
-            ],
             md5: 'fe043db84c6c6ff423496f5e3ebd33e4',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2014-q4-major/+download/gcc-arm-none-eabi-4_9-2014q4-20141203-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/192227901/gcc-arm-none-eabi-4_9-2014q4-20141203-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2014-q4-major/+download/gcc-arm-none-eabi-4_9-2014q4-20141203-mac.tar.bz2',
-            ],
             md5: 'a3b0ab5bd08ba5ad840b7cb5f17becb0',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.9/4.9-2014-q4-major/+download/gcc-arm-none-eabi-4_9-2014q4-20141203-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/192227997/gcc-arm-none-eabi-4_9-2014q4-20141203-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.9/4.9-2014-q4-major/+download/gcc-arm-none-eabi-4_9-2014q4-20141203-linux.tar.bz2',
-            ],
             md5: '74cc4f012699c171089e72832d95bf4c',
-            sha256: null,
         },
     },
     '4.8-2014-q3': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q3-update/+download/gcc-arm-none-eabi-4_8-2014q3-20140805-win32.zip
             url: 'https://launchpadlibrarian.net/186124217/gcc-arm-none-eabi-4_8-2014q3-20140805-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q3-update/+download/gcc-arm-none-eabi-4_8-2014q3-20140805-win32.zip',
-            ],
             md5: '4b07ff1ce5a38d394a6c13bf9ac07810',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q3-update/+download/gcc-arm-none-eabi-4_8-2014q3-20140805-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/186124092/gcc-arm-none-eabi-4_8-2014q3-20140805-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q3-update/+download/gcc-arm-none-eabi-4_8-2014q3-20140805-mac.tar.bz2',
-            ],
             md5: '1ca44d778fc3b4799d76c98345ed7826',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q3-update/+download/gcc-arm-none-eabi-4_8-2014q3-20140805-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/186124160/gcc-arm-none-eabi-4_8-2014q3-20140805-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q3-update/+download/gcc-arm-none-eabi-4_8-2014q3-20140805-linux.tar.bz2',
-            ],
             md5: 'acc8c8ff45f8801e2155934214309a87',
-            sha256: null,
         },
     },
     '4.8-2014-q2': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q2-update/+download/gcc-arm-none-eabi-4_8-2014q2-20140609-win32.zip
             url: 'https://launchpadlibrarian.net/177524899/gcc-arm-none-eabi-4_8-2014q2-20140609-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q2-update/+download/gcc-arm-none-eabi-4_8-2014q2-20140609-win32.zip',
-            ],
             md5: 'd6e29ea8b587f871ec308214703383bf',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q2-update/+download/gcc-arm-none-eabi-4_8-2014q2-20140609-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/177524733/gcc-arm-none-eabi-4_8-2014q2-20140609-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q2-update/+download/gcc-arm-none-eabi-4_8-2014q2-20140609-mac.tar.bz2',
-            ],
             md5: '4a05e26d9eb30f43752667a34001e755',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q2-update/+download/gcc-arm-none-eabi-4_8-2014q2-20140609-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/177524816/gcc-arm-none-eabi-4_8-2014q2-20140609-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q2-update/+download/gcc-arm-none-eabi-4_8-2014q2-20140609-linux.tar.bz2',
-            ],
             md5: '0f80c6d2684c8e2bece37a2de4e8963b',
-            sha256: null,
         },
     },
     '4.8-2014-q1': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q1-update/+download/gcc-arm-none-eabi-4_8-2014q1-20140314-win32.zip
             url: 'https://launchpadlibrarian.net/170926686/gcc-arm-none-eabi-4_8-2014q1-20140314-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q1-update/+download/gcc-arm-none-eabi-4_8-2014q1-20140314-win32.zip',
-            ],
             md5: '09c19b3248863074f5498a88f31bee16',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q1-update/+download/gcc-arm-none-eabi-4_8-2014q1-20140314-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/170926386/gcc-arm-none-eabi-4_8-2014q1-20140314-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q1-update/+download/gcc-arm-none-eabi-4_8-2014q1-20140314-mac.tar.bz2',
-            ],
             md5: '5d34d95a53ba545f1585b9136cbb6805',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q1-update/+download/gcc-arm-none-eabi-4_8-2014q1-20140314-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/170926605/gcc-arm-none-eabi-4_8-2014q1-20140314-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q1-update/+download/gcc-arm-none-eabi-4_8-2014q1-20140314-linux.tar.bz2',
-            ],
             md5: '72b0d06ae16b303c25fd70b2883d3950',
-            sha256: null,
         },
     },
     '4.7-2014-q2': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2014-q2-update/+download/gcc-arm-none-eabi-4_7-2014q2-20140408-win32.zip
             url: 'https://launchpadlibrarian.net/174121673/gcc-arm-none-eabi-4_7-2014q2-20140408-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2014-q2-update/+download/gcc-arm-none-eabi-4_7-2014q2-20140408-win32.zip',
-            ],
             md5: '4bdec324a4f3f36d54f084f890aabb2a',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2014-q2-update/+download/gcc-arm-none-eabi-4_7-2014q2-20140408-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/174121504/gcc-arm-none-eabi-4_7-2014q2-20140408-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2014-q2-update/+download/gcc-arm-none-eabi-4_7-2014q2-20140408-mac.tar.bz2',
-            ],
             md5: '911649c1756d9501e90de0be120d1696',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2014-q2-update/+download/gcc-arm-none-eabi-4_7-2014q2-20140408-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/174121628/gcc-arm-none-eabi-4_7-2014q2-20140408-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2014-q2-update/+download/gcc-arm-none-eabi-4_7-2014q2-20140408-linux.tar.bz2',
-            ],
             md5: '239a1a180e10dc40aff870e1e7b650f9',
-            sha256: null,
         },
     },
     '4.8-2013-q4': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2013-q4-major/+download/gcc-arm-none-eabi-4_8-2013q4-20131204-win32.zip
             url: 'https://launchpadlibrarian.net/160488289/gcc-arm-none-eabi-4_8-2013q4-20131204-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2013-q4-major/+download/gcc-arm-none-eabi-4_8-2013q4-20131204-win32.zip',
-            ],
             md5: 'ca47c682f9b3bd14d0a6ce1f175716fa',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2013-q4-major/+download/gcc-arm-none-eabi-4_8-2013q4-20131218-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/162333029/gcc-arm-none-eabi-4_8-2013q4-20131218-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2013-q4-major/+download/gcc-arm-none-eabi-4_8-2013q4-20131218-mac.tar.bz2',
-            ],
             md5: '850caa23f01ea8c1e6abcc3c217d36f7',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.8/4.8-2013-q4-major/+download/gcc-arm-none-eabi-4_8-2013q4-20131204-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/160488069/gcc-arm-none-eabi-4_8-2013q4-20131204-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.8/4.8-2013-q4-major/+download/gcc-arm-none-eabi-4_8-2013q4-20131204-linux.tar.bz2',
-            ],
             md5: '4869e6a6e1dc11ea0835e8b8213bb194',
-            sha256: null,
         },
     },
     '4.7-2013-q3': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q3-update/+download/gcc-arm-none-eabi-4_7-2013q3-20130916-win32.zip
             url: 'https://launchpadlibrarian.net/151487752/gcc-arm-none-eabi-4_7-2013q3-20130916-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q3-update/+download/gcc-arm-none-eabi-4_7-2013q3-20130916-win32.zip',
-            ],
             md5: 'bf5ed93bc5f8fbb7caf4ff1689c14ab7',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q3-update/+download/gcc-arm-none-eabi-4_7-2013q3-20130916-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/151487551/gcc-arm-none-eabi-4_7-2013q3-20130916-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q3-update/+download/gcc-arm-none-eabi-4_7-2013q3-20130916-mac.tar.bz2',
-            ],
             md5: '2d0642041f09e2949ccb7c5f826642cf',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q3-update/+download/gcc-arm-none-eabi-4_7-2013q3-20130916-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/151487636/gcc-arm-none-eabi-4_7-2013q3-20130916-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q3-update/+download/gcc-arm-none-eabi-4_7-2013q3-20130916-linux.tar.bz2',
-            ],
             md5: 'c35b662e371f369619cf202692a4d10b',
-            sha256: null,
         },
     },
     '4.7-2013-q2': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q2-update/+download/gcc-arm-none-eabi-4_7-2013q2-20130614-win32.zip
             url: 'https://launchpadlibrarian.net/143626040/gcc-arm-none-eabi-4_7-2013q2-20130614-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q2-update/+download/gcc-arm-none-eabi-4_7-2013q2-20130614-win32.zip',
-            ],
             md5: '7e9e17ebeb2fc3d4117ff9f537f42852',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q2-update/+download/gcc-arm-none-eabi-4_7-2013q2-20130614-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/143625835/gcc-arm-none-eabi-4_7-2013q2-20130614-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q2-update/+download/gcc-arm-none-eabi-4_7-2013q2-20130614-mac.tar.bz2',
-            ],
             md5: '11c77b8eec68d4e90e7a300c0d506deb',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q2-update/+download/gcc-arm-none-eabi-4_7-2013q2-20130614-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/143625888/gcc-arm-none-eabi-4_7-2013q2-20130614-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q2-update/+download/gcc-arm-none-eabi-4_7-2013q2-20130614-linux.tar.bz2',
-            ],
             md5: 'b842a77113622246c7db615b99a616ef',
-            sha256: null,
         },
     },
     '4.7-2013-q1': {
         win32: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q1-update/+download/gcc-arm-none-eabi-4_7-2013q1-20130313-win32.zip
             url: 'https://launchpadlibrarian.net/135590595/gcc-arm-none-eabi-4_7-2013q1-20130313-win32.zip',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q1-update/+download/gcc-arm-none-eabi-4_7-2013q1-20130313-win32.zip',
-            ],
             md5: 'eb0cf714f1bafb42bd0b22c8b6128ce0',
-            sha256: null,
         },
         mac_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q1-update/+download/gcc-arm-none-eabi-4_7-2013q1-20130313-mac.tar.bz2
             url: 'https://launchpadlibrarian.net/135590305/gcc-arm-none-eabi-4_7-2013q1-20130313-mac.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q1-update/+download/gcc-arm-none-eabi-4_7-2013q1-20130313-mac.tar.bz2',
-            ],
             md5: '017aebb1e47dd772bd535741c68df5de',
-            sha256: null,
         },
         linux_x86_64: {
+            // redirect from https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q1-update/+download/gcc-arm-none-eabi-4_7-2013q1-20130313-linux.tar.bz2
             url: 'https://launchpadlibrarian.net/135590399/gcc-arm-none-eabi-4_7-2013q1-20130313-linux.tar.bz2',
-            mirrorUrls: [
-                // This is the original launchpad.net URL, which redirects to the address set to url
-                'https://launchpad.net/gcc-arm-embedded/4.7/4.7-2013-q1-update/+download/gcc-arm-none-eabi-4_7-2013q1-20130313-linux.tar.bz2',
-            ],
             md5: 'bcf845e5cd0608a0d56825d8763cba77',
-            sha256: null,
         },
     },
 };
 
+/* eslint-disable @typescript-eslint/naming-convention */
+// Some Arm download endpoints reject unfamiliar user agents with a challenge page redirect.
+const userAgent = 'curl/8.5.0 (arm-none-eabi-gcc-action)';
+async function followRedirects(originalUrl) {
+    const MAX_REDIRECTS = 5;
+    let currentUrl = originalUrl;
+    for (let attempt = 0; attempt < MAX_REDIRECTS; attempt++) {
+        const response = await fetch(currentUrl, {
+            method: 'HEAD',
+            redirect: 'manual',
+            headers: { 'User-Agent': userAgent },
+        });
+        const statusCode = response.status;
+        if (statusCode >= 300 && statusCode < 400) {
+            const locationValue = response.headers.get('location');
+            if (!locationValue) {
+                debug(`Redirect for ${originalUrl} detected without location header at ${currentUrl}`);
+                break;
+            }
+            const nextUrl = new URL(locationValue, currentUrl).toString();
+            info(`Detected redirect (${statusCode}) for GCC download.`);
+            info(`\tFollowing ${originalUrl}`);
+            info(`\tto        ${nextUrl}`);
+            if (attempt >= MAX_REDIRECTS - 1) {
+                warning(`Maximum redirects reached for ${originalUrl}`);
+            }
+            currentUrl = nextUrl;
+            continue;
+        }
+        break;
+    }
+    return currentUrl;
+}
 function availableVersions() {
     return Object.keys(gccVersions);
 }
@@ -78940,7 +78515,7 @@ function latestGccVersion() {
     // Since ES6 (from node v8.x) JS objects are ordered
     return Object.keys(gccVersions)[0];
 }
-function distributionUrl(version, platform, arch) {
+async function distributionUrl(version, platform, arch) {
     // Convert the node platform value to the versions URL keys
     let osName = '';
     switch (platform) {
@@ -78982,11 +78557,20 @@ function distributionUrl(version, platform, arch) {
             'The action README has the list of available versions and platforms.');
     }
     const distData = gccVersions[version][osName];
+    // Arm download files have been moved between servers in the past, so
+    // we try to resolve any redirects here up-front to avoid issues later
+    let resolvedUrl = distData.url;
+    try {
+        resolvedUrl = await followRedirects(distData.url);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        debug(`Redirect resolution failed for ${distData.url}: ${message}`);
+    }
     return {
-        url: distData.url,
-        mirrorUrls: distData.mirrorUrls,
+        url: resolvedUrl,
+        urlOriginal: distData.url,
         md5: distData.md5,
-        sha256: distData.sha256,
     };
 }
 function gccVersionToSemver(gccVersion) {
@@ -79036,67 +78620,36 @@ function gccVersionToSemver(gccVersion) {
     return gccSemver;
 }
 
-async function verifyChecksum(checksumTag, filePath) {
-    const [algorithm, expected] = checksumTag.split(':');
-    const hash = await new Promise((resolve, reject) => {
-        const h = crypto$1.createHash(algorithm);
-        fs.createReadStream(filePath)
-            .on('error', reject)
-            .on('data', chunk => h.update(chunk))
-            .on('end', () => resolve(h.digest('hex')));
-    });
-    if (hash !== expected) {
-        throw new Error(`Downloaded GCC ${algorithm} doesn't match expected value: ${hash} != ${expected}`);
-    }
-}
-async function downloadAndVerify(urls, checksumTag) {
-    for (let i = 0; i < urls.length; i++) {
-        try {
-            info(`Downloading from ${urls[i]}`);
-            const file = await downloadTool(urls[i]);
-            await verifyChecksum(checksumTag, file);
-            info(`Downloaded and verified (${file}, ${checksumTag}).`);
-            return file;
-        }
-        catch (err) {
-            if (i === urls.length - 1)
-                throw err;
-            warning(`⚠️ Download from ${urls[i]} failed, trying mirror URL.\n${err.message}`);
-        }
-    }
-    throw new Error('No download URLs available');
-}
-async function install(release, platform, arch) {
+async function install(release, platform, arch, useCache, useToolsCache) {
     const toolName = 'gcc-arm-none-eabi';
     // Get the GCC release info
-    const distData = distributionUrl(release, platform, arch);
-    // Prioritise SHA256 over MD5
-    const checksumTag = distData.sha256 ? `sha256:${distData.sha256}` : distData.md5 ? `md5:${distData.md5}` : null;
-    if (!checksumTag) {
-        throw new Error(`No checksum (sha256 or md5) available for GCC ${release}; refusing to install unverified.`);
-    }
-    // The checksum is part of the cache key, so no need to verify cache hit
+    const distData = await distributionUrl(release, platform, arch);
+    // Convert the GCC version to Semver so that it can be used with the GH cache
     const toolVersion = gccVersionToSemver(release);
-    const cacheKey = `${toolName}-${toolVersion}-${platform}-${arch}-${checksumTag.replace(':', '-')}`;
-    const installPath = path.join(os.homedir(), `${toolName}-${toolVersion}-${platform}-${arch}`);
+    const cacheKey = `${toolName}-${toolVersion}-${platform}-${arch}`;
     debug(`Cache key: ${cacheKey}`);
-    // Try to load the GCC installation from the cache
-    let cacheKeyMatched = undefined;
-    try {
-        cacheKeyMatched = await restoreCache([installPath], cacheKey);
-        debug(`Matched cache.restoreCache() key: ${cacheKeyMatched}`);
+    // Try to use GCC installation from hosted tools cache
+    if (useToolsCache) {
+        const hcPath = await loadFromToolsCache(toolName, toolVersion, distData, arch, cacheKey, useCache);
+        if (hcPath) {
+            return hcPath;
+        }
     }
-    catch (err) {
-        warning(`⚠️ Could not find contents in the cache.\n${err.message}`);
+    const installPath = path.join(os.homedir(), cacheKey);
+    if (useCache) {
+        const cachePath = await loadFromCache(installPath, cacheKey, distData);
+        if (cachePath) {
+            return cachePath;
+        }
     }
-    if (cacheKeyMatched === cacheKey) {
-        info(`Cached version loaded: ${installPath}`);
-        return installPath;
+    info(`Cache miss, downloading GCC ${release} from ${distData.url} ; MD5 ${distData.md5}`);
+    const gccDownloadPath = await downloadTool(distData.url);
+    info(`GCC release downloaded, calculating MD5...`);
+    const downloadHash = await md5File(gccDownloadPath);
+    info(`Downloaded file MD5: ${downloadHash}`);
+    if (distData.md5 && downloadHash !== distData.md5) {
+        throw new Error(`Downloaded GCC MD5 doesn't match expected value: ${downloadHash} != ${distData.md5}`);
     }
-    info(`Cache miss, downloading GCC ${release}`);
-    const downloadUrls = [distData.url, ...distData.mirrorUrls];
-    const gccDownloadPath = await downloadAndVerify(downloadUrls, checksumTag);
-    // Candidate urls are mirrors of the same file, so the extension comes from the primary url.
     info(`Extracting ${gccDownloadPath}`);
     let extractedPath = '';
     if (distData.url.endsWith('.zip')) {
@@ -79112,12 +78665,17 @@ async function install(release, platform, arch) {
         throw new Error(`Can't decompress ${distData.url}`);
     }
     // Adding installation to the cache
-    info(`Adding to cache: ${extractedPath}`);
-    try {
-        await saveCache([extractedPath], cacheKey);
+    if (useCache) {
+        await saveToCache(extractedPath, downloadHash, cacheKey);
     }
-    catch (err) {
-        warning(`⚠️ Could not save to the cache.\n${err.message}`);
+    // Adding installation to hosted tools cache
+    if (useToolsCache) {
+        try {
+            await cacheDir(extractedPath, toolName, toolVersion, arch);
+        }
+        catch (err) {
+            warning(`⚠️ Failed to copy GCC release to hosted tool cache.\n${err.message}`);
+        }
     }
     return extractedPath;
 }
@@ -79142,6 +78700,77 @@ function findGcc(root, platform) {
     platform = platform || process.platform;
     return findGccRecursive(root, `arm-none-eabi-gcc${platform === 'win32' ? '.exe' : ''}`);
 }
+async function saveToCache(extractedPath, distHash, cacheKey) {
+    info(`Adding to cache: ${extractedPath}`);
+    await fs.promises.writeFile(path.join(extractedPath, 'md5.txt'), distHash, {
+        encoding: 'utf8',
+    });
+    try {
+        await saveCache([extractedPath], cacheKey);
+    }
+    catch (err) {
+        warning(`⚠️ Could not save to the cache.\n${err.message}`);
+    }
+}
+// returns path to gcc installation downloaded from cache, or undefined if it wasn't found or was wrong.
+async function loadFromCache(installPath, cacheKey, distData) {
+    // Try to load the GCC installation from the cache
+    let cacheKeyMatched = undefined;
+    try {
+        cacheKeyMatched = await restoreCache([installPath], cacheKey);
+        debug(`Matched cache.restoreCache() key: ${cacheKeyMatched}`);
+    }
+    catch (err) {
+        warning(`⚠️ Could not find contents in the cache.\n${err.message}`);
+        return '';
+    }
+    if (cacheKeyMatched === cacheKey) {
+        info(`Cache found: ${installPath}`);
+        let cacheMd5 = 'MD5 not found in cached installation';
+        try {
+            cacheMd5 = await fs.promises.readFile(path.join(installPath, 'md5.txt'), {
+                encoding: 'utf8',
+            });
+        }
+        catch (err) {
+            warning(`⚠️ Could not read the contents of the cached GCC version MD5.\n${err.message}`);
+            return '';
+        }
+        info(`Cached version MD5: ${cacheMd5}`);
+        if (cacheMd5 !== distData.md5) {
+            warning(`⚠️ Cached version MD5 does not match: ${cacheMd5} != ${distData.md5}`);
+            return '';
+        }
+        else {
+            info('Cached version loaded.');
+            return installPath;
+        }
+    }
+    return '';
+}
+async function loadFromToolsCache(toolName, toolVersion, distData, arch, cacheKey, useCache) {
+    // hosted tools cache should always have the tools matching its platform...
+    const hcPath = find(toolName, toolVersion, arch);
+    const hcMd5 = await fs.promises.readFile(path.join(hcPath, 'md5.txt'), 'utf8').catch(e => {
+        debug(`Failed to read tool cache version MD5: ${e}`);
+        debug(`Not found in hosted tool cache @ ${hcPath}`);
+    });
+    if (hcMd5) {
+        info(`Tool cache version found @ ${hcPath}`);
+        info(`Tool cache version MD5: ${hcMd5}`);
+        if (hcMd5 !== distData.md5) {
+            warning(`⚠️ Tool cache version MD5 does not match: ${hcMd5} != ${distData.md5}`);
+        }
+        else {
+            info('Tool cache version loaded.');
+            if (useCache) {
+                await saveToCache(hcPath, hcMd5, cacheKey);
+            }
+            return hcPath;
+        }
+    }
+    return '';
+}
 
 async function run() {
     try {
@@ -79149,7 +78778,9 @@ async function run() {
         if (!release || release === 'latest') {
             release = latestGccVersion();
         }
-        const installPath = await install(release, process.platform, process.arch);
+        const useCache = getBooleanInput('use-cache');
+        const useToolsCache = getBooleanInput('use-tools-cache');
+        const installPath = await install(release, process.platform, process.arch, useCache, useToolsCache);
         const gccPath = findGcc(installPath);
         if (!gccPath) {
             throw new Error(`Could not find gcc executable in ${gccPath}`);
