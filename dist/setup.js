@@ -1,41 +1,74 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import * as core from '@actions/core';
 import * as tc from '@actions/tool-cache';
 import * as cache from '@actions/cache';
-import md5File from 'md5-file';
 import * as gcc from './gcc.js';
-export async function install(release, platform, arch, useCache, useToolsCache) {
+async function verifyChecksum(checksumTag, filePath) {
+    const [algorithm, expected] = checksumTag.split(':');
+    const hash = await new Promise((resolve, reject) => {
+        const h = crypto.createHash(algorithm);
+        fs.createReadStream(filePath)
+            .on('error', reject)
+            .on('data', chunk => h.update(chunk))
+            .on('end', () => resolve(h.digest('hex')));
+    });
+    if (hash !== expected) {
+        throw new Error(`Downloaded GCC ${algorithm} doesn't match expected value: ${hash} != ${expected}`);
+    }
+}
+async function downloadAndVerify(urls, checksumTag) {
+    for (let i = 0; i < urls.length; i++) {
+        try {
+            core.info(`Downloading from ${urls[i]}`);
+            const file = await tc.downloadTool(urls[i]);
+            await verifyChecksum(checksumTag, file);
+            core.info(`Downloaded and verified (${file}, ${checksumTag}).`);
+            return file;
+        }
+        catch (err) {
+            if (i === urls.length - 1)
+                throw err;
+            core.warning(`⚠️ Download from ${urls[i]} failed, trying mirror URL.\n${err.message}`);
+        }
+    }
+    throw new Error('No download URLs available');
+}
+export async function install(release, platform, arch, useCache = true, useRunnerCache = false) {
     const toolName = 'gcc-arm-none-eabi';
     // Get the GCC release info
-    const distData = await gcc.distributionUrl(release, platform, arch);
-    // Convert the GCC version to Semver so that it can be used with the GH cache
+    const distData = gcc.distributionUrl(release, platform, arch);
+    // Prioritise SHA256 over MD5
+    const checksumTag = distData.sha256 ? `sha256:${distData.sha256}` : distData.md5 ? `md5:${distData.md5}` : null;
+    if (!checksumTag) {
+        throw new Error(`No checksum (sha256 or md5) available for GCC ${release}; refusing to install unverified.`);
+    }
+    // The checksum is part of the cache key, so no need to verify cache hit
     const toolVersion = gcc.gccVersionToSemver(release);
-    const cacheKey = `${toolName}-${toolVersion}-${platform}-${arch}`;
+    const cacheKey = `${toolName}-${toolVersion}-${platform}-${arch}-${checksumTag.replace(':', '-')}`;
+    const installPath = path.join(os.homedir(), `${toolName}-${toolVersion}-${platform}-${arch}`);
     core.debug(`Cache key: ${cacheKey}`);
-    // Try to use GCC installation from hosted tools cache
-    if (useToolsCache) {
-        const hcPath = await loadFromToolsCache(toolName, toolVersion, distData, arch, cacheKey, useCache);
+    // Try to use GCC installation from hosted tools cache.
+    // The hash won't be verified as the original archive isn't available...
+    // Assuming the release was copied properly into the runner's tool cache.
+    if (useRunnerCache) {
+        const hcPath = loadFromRunnerCache(toolName, toolVersion, arch);
         if (hcPath) {
             return hcPath;
         }
     }
-    const installPath = path.join(os.homedir(), cacheKey);
     if (useCache) {
-        const cachePath = await loadFromCache(installPath, cacheKey, distData);
+        const cachePath = await loadFromCache(installPath, cacheKey);
         if (cachePath) {
             return cachePath;
         }
     }
-    core.info(`Cache miss, downloading GCC ${release} from ${distData.url} ; MD5 ${distData.md5}`);
-    const gccDownloadPath = await tc.downloadTool(distData.url);
-    core.info(`GCC release downloaded, calculating MD5...`);
-    const downloadHash = await md5File(gccDownloadPath);
-    core.info(`Downloaded file MD5: ${downloadHash}`);
-    if (distData.md5 && downloadHash !== distData.md5) {
-        throw new Error(`Downloaded GCC MD5 doesn't match expected value: ${downloadHash} != ${distData.md5}`);
-    }
+    core.info(`Cache miss, downloading GCC ${release}`);
+    const downloadUrls = [distData.url, ...distData.mirrorUrls];
+    const gccDownloadPath = await downloadAndVerify(downloadUrls, checksumTag);
+    // Candidate urls are mirrors of the same file, so the extension comes from the primary url.
     core.info(`Extracting ${gccDownloadPath}`);
     let extractedPath = '';
     if (distData.url.endsWith('.zip')) {
@@ -52,10 +85,16 @@ export async function install(release, platform, arch, useCache, useToolsCache) 
     }
     // Adding installation to the cache
     if (useCache) {
-        await saveToCache(extractedPath, downloadHash, cacheKey);
+        core.info(`Adding to cache: ${extractedPath}`);
+        try {
+            await cache.saveCache([extractedPath], cacheKey);
+        }
+        catch (err) {
+            core.warning(`⚠️ Could not save to the cache.\n${err.message}`);
+        }
     }
     // Adding installation to hosted tools cache
-    if (useToolsCache) {
+    if (useRunnerCache) {
         try {
             await tc.cacheDir(extractedPath, toolName, toolVersion, arch);
         }
@@ -86,20 +125,8 @@ export function findGcc(root, platform) {
     platform = platform || process.platform;
     return findGccRecursive(root, `arm-none-eabi-gcc${platform === 'win32' ? '.exe' : ''}`);
 }
-async function saveToCache(extractedPath, distHash, cacheKey) {
-    core.info(`Adding to cache: ${extractedPath}`);
-    await fs.promises.writeFile(path.join(extractedPath, 'md5.txt'), distHash, {
-        encoding: 'utf8',
-    });
-    try {
-        await cache.saveCache([extractedPath], cacheKey);
-    }
-    catch (err) {
-        core.warning(`⚠️ Could not save to the cache.\n${err.message}`);
-    }
-}
 // returns path to gcc installation downloaded from cache, or undefined if it wasn't found or was wrong.
-async function loadFromCache(installPath, cacheKey, distData) {
+async function loadFromCache(installPath, cacheKey) {
     // Try to load the GCC installation from the cache
     let cacheKeyMatched = undefined;
     try {
@@ -111,49 +138,13 @@ async function loadFromCache(installPath, cacheKey, distData) {
         return '';
     }
     if (cacheKeyMatched === cacheKey) {
-        core.info(`Cache found: ${installPath}`);
-        let cacheMd5 = 'MD5 not found in cached installation';
-        try {
-            cacheMd5 = await fs.promises.readFile(path.join(installPath, 'md5.txt'), {
-                encoding: 'utf8',
-            });
-        }
-        catch (err) {
-            core.warning(`⚠️ Could not read the contents of the cached GCC version MD5.\n${err.message}`);
-            return '';
-        }
-        core.info(`Cached version MD5: ${cacheMd5}`);
-        if (cacheMd5 !== distData.md5) {
-            core.warning(`⚠️ Cached version MD5 does not match: ${cacheMd5} != ${distData.md5}`);
-            return '';
-        }
-        else {
-            core.info('Cached version loaded.');
-            return installPath;
-        }
+        core.info(`Cached version loaded: ${installPath}`);
+        return installPath;
     }
     return '';
 }
-async function loadFromToolsCache(toolName, toolVersion, distData, arch, cacheKey, useCache) {
-    // hosted tools cache should always have the tools matching its platform...
-    const hcPath = tc.find(toolName, toolVersion, arch);
-    const hcMd5 = await fs.promises.readFile(path.join(hcPath, 'md5.txt'), 'utf8').catch(e => {
-        core.debug(`Failed to read tool cache version MD5: ${e}`);
-        core.debug(`Not found in hosted tool cache @ ${hcPath}`);
-    });
-    if (hcMd5) {
-        core.info(`Tool cache version found @ ${hcPath}`);
-        core.info(`Tool cache version MD5: ${hcMd5}`);
-        if (hcMd5 !== distData.md5) {
-            core.warning(`⚠️ Tool cache version MD5 does not match: ${hcMd5} != ${distData.md5}`);
-        }
-        else {
-            core.info('Tool cache version loaded.');
-            if (useCache) {
-                await saveToCache(hcPath, hcMd5, cacheKey);
-            }
-            return hcPath;
-        }
-    }
-    return '';
+function loadFromRunnerCache(toolName, toolVersion, arch) {
+    // will not write runner cache version to action cache,
+    // as we don't know if it was modified after download
+    return tc.find(toolName, toolVersion, arch);
 }
