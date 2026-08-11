@@ -13,7 +13,7 @@ inputs:
     description: 'Save arm-none-eabi-gcc installation to GitHub Actions cache.'
     default: 'true'
     required: false
-  use-tools-cache:
+  use-runner-cache:
     description: 'Try to find arm-none-eabi-gcc installation in runner''s local tool cache before downloading from actions cache.'
     default: 'false'
     required: false

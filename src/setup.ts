@@ -8,7 +8,6 @@ import * as tc from '@actions/tool-cache';
 import * as cache from '@actions/cache';
 
 import * as gcc from './gcc.js';
-import type {GccDownloadInfo} from './gcc-versions.ts';
 
 async function verifyChecksum(checksumTag: string, filePath: string): Promise<void> {
   const [algorithm, expected] = checksumTag.split(':');
@@ -44,8 +43,8 @@ export async function install(
   release: string,
   platform: string,
   arch: string,
-  useCache: boolean,
-  useToolsCache: boolean
+  useCache: boolean = true,
+  useRunnerCache: boolean = false
 ): Promise<string> {
   const toolName = 'gcc-arm-none-eabi';
 
@@ -64,9 +63,11 @@ export async function install(
   const installPath = path.join(os.homedir(), `${toolName}-${toolVersion}-${platform}-${arch}`);
   core.debug(`Cache key: ${cacheKey}`);
 
-  // Try to use GCC installation from hosted tools cache
-  if (useToolsCache) {
-    const hcPath = await loadFromToolsCache(toolName, toolVersion, distData, arch, cacheKey, useCache);
+  // Try to use GCC installation from hosted tools cache.
+  // The hash won't be verified as the original archive isn't available...
+  // Assuming the release was copied properly into the runner's tool cache.
+  if (useRunnerCache) {
+    const hcPath = loadFromRunnerCache(toolName, toolVersion, arch);
     if (hcPath) {
       return hcPath;
     }
@@ -103,7 +104,7 @@ export async function install(
   }
 
   // Adding installation to hosted tools cache
-  if (useToolsCache) {
+  if (useRunnerCache) {
     try {
       await tc.cacheDir(extractedPath, toolName, toolVersion, arch);
     } catch (err) {
@@ -183,32 +184,8 @@ async function loadFromCache(installPath: string, cacheKey: string, distData: Gc
   return '';
 }
 
-async function loadFromToolsCache(
-  toolName: string,
-  toolVersion: string,
-  distData: GccDownloadInfo,
-  arch: string,
-  cacheKey: string,
-  useCache: boolean
-): Promise<string> {
-  // hosted tools cache should always have the tools matching its platform...
-  const hcPath = tc.find(toolName, toolVersion, arch);
-  const hcMd5 = await fs.promises.readFile(path.join(hcPath, 'md5.txt'), 'utf8').catch(e => {
-    core.debug(`Failed to read tool cache version MD5: ${e}`);
-    core.debug(`Not found in hosted tool cache @ ${hcPath}`);
-  });
-  if (hcMd5) {
-    core.info(`Tool cache version found @ ${hcPath}`);
-    core.info(`Tool cache version MD5: ${hcMd5}`);
-    if (hcMd5 !== distData.md5) {
-      core.warning(`⚠️ Tool cache version MD5 does not match: ${hcMd5} != ${distData.md5}`);
-    } else {
-      core.info('Tool cache version loaded.');
-      if (useCache) {
-        await saveToCache(hcPath, hcMd5, cacheKey);
-      }
-      return hcPath;
-    }
-  }
-  return '';
+function loadFromRunnerCache(toolName: string, toolVersion: string, arch: string) {
+  // will not write runner cache version to action cache,
+  // as we don't know if it was modified after download
+  return tc.find(toolName, toolVersion, arch);
 }
