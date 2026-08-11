@@ -43,8 +43,8 @@ export async function install(
   release: string,
   platform: string,
   arch: string,
-  useCache: boolean = true,
-  useRunnerCache: boolean = false
+  useCache = true,
+  useRunnerCache = false
 ): Promise<string> {
   const toolName = 'gcc-arm-none-eabi';
 
@@ -73,9 +73,8 @@ export async function install(
     }
   }
 
-  const installPath = path.join(os.homedir(), cacheKey);
   if (useCache) {
-    const cachePath = await loadFromCache(installPath, cacheKey, distData);
+    const cachePath = await loadFromCache(installPath, cacheKey);
     if (cachePath) {
       return cachePath;
     }
@@ -100,7 +99,12 @@ export async function install(
 
   // Adding installation to the cache
   if (useCache) {
-    await saveToCache(extractedPath, downloadHash, cacheKey);
+    core.info(`Adding to cache: ${extractedPath}`);
+    try {
+      await cache.saveCache([extractedPath], cacheKey);
+    } catch (err) {
+      core.warning(`⚠️ Could not save to the cache.\n${err.message}`);
+    }
   }
 
   // Adding installation to hosted tools cache
@@ -138,20 +142,8 @@ export function findGcc(root: string, platform?: string): string {
   return findGccRecursive(root, `arm-none-eabi-gcc${platform === 'win32' ? '.exe' : ''}`);
 }
 
-async function saveToCache(extractedPath: string, distHash: string, cacheKey: string): Promise<void> {
-  core.info(`Adding to cache: ${extractedPath}`);
-  await fs.promises.writeFile(path.join(extractedPath, 'md5.txt'), distHash, {
-    encoding: 'utf8',
-  });
-  try {
-    await cache.saveCache([extractedPath], cacheKey);
-  } catch (err) {
-    core.warning(`⚠️ Could not save to the cache.\n${err.message}`);
-  }
-}
-
 // returns path to gcc installation downloaded from cache, or undefined if it wasn't found or was wrong.
-async function loadFromCache(installPath: string, cacheKey: string, distData: GccDownloadInfo): Promise<string> {
+async function loadFromCache(installPath: string, cacheKey: string): Promise<string> {
   // Try to load the GCC installation from the cache
   let cacheKeyMatched: string | undefined = undefined;
   try {
@@ -162,29 +154,13 @@ async function loadFromCache(installPath: string, cacheKey: string, distData: Gc
     return '';
   }
   if (cacheKeyMatched === cacheKey) {
-    core.info(`Cache found: ${installPath}`);
-    let cacheMd5 = 'MD5 not found in cached installation';
-    try {
-      cacheMd5 = await fs.promises.readFile(path.join(installPath, 'md5.txt'), {
-        encoding: 'utf8',
-      });
-    } catch (err) {
-      core.warning(`⚠️ Could not read the contents of the cached GCC version MD5.\n${err.message}`);
-      return '';
-    }
-    core.info(`Cached version MD5: ${cacheMd5}`);
-    if (cacheMd5 !== distData.md5) {
-      core.warning(`⚠️ Cached version MD5 does not match: ${cacheMd5} != ${distData.md5}`);
-      return '';
-    } else {
-      core.info('Cached version loaded.');
-      return installPath;
-    }
+    core.info(`Cached version loaded: ${installPath}`);
+    return installPath;
   }
   return '';
 }
 
-function loadFromRunnerCache(toolName: string, toolVersion: string, arch: string) {
+function loadFromRunnerCache(toolName: string, toolVersion: string, arch: string): string {
   // will not write runner cache version to action cache,
   // as we don't know if it was modified after download
   return tc.find(toolName, toolVersion, arch);
