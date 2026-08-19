@@ -39,7 +39,13 @@ async function downloadAndVerify(urls: string[], checksumTag: string): Promise<s
   throw new Error('No download URLs available');
 }
 
-export async function install(release: string, platform: string, arch: string): Promise<string> {
+export async function install(
+  release: string,
+  platform: string,
+  arch: string,
+  useCache = true,
+  useRunnerCache = false
+): Promise<string> {
   const toolName = 'gcc-arm-none-eabi';
 
   // Get the GCC release info
@@ -57,17 +63,21 @@ export async function install(release: string, platform: string, arch: string): 
   const installPath = path.join(os.homedir(), `${toolName}-${toolVersion}-${platform}-${arch}`);
   core.debug(`Cache key: ${cacheKey}`);
 
-  // Try to load the GCC installation from the cache
-  let cacheKeyMatched: string | undefined = undefined;
-  try {
-    cacheKeyMatched = await cache.restoreCache([installPath], cacheKey);
-    core.debug(`Matched cache.restoreCache() key: ${cacheKeyMatched}`);
-  } catch (err) {
-    core.warning(`⚠️ Could not find contents in the cache.\n${err.message}`);
+  // Try to use GCC installation from hosted tools cache.
+  // The hash won't be verified as the original archive isn't available...
+  // Assuming the release was copied properly into the runner's tool cache.
+  if (useRunnerCache) {
+    const hcPath = loadFromRunnerCache(toolName, toolVersion, arch);
+    if (hcPath) {
+      return hcPath;
+    }
   }
-  if (cacheKeyMatched === cacheKey) {
-    core.info(`Cached version loaded: ${installPath}`);
-    return installPath;
+
+  if (useCache) {
+    const cachePath = await loadFromCache(installPath, cacheKey);
+    if (cachePath) {
+      return cachePath;
+    }
   }
 
   core.info(`Cache miss, downloading GCC ${release}`);
@@ -88,11 +98,22 @@ export async function install(release: string, platform: string, arch: string): 
   }
 
   // Adding installation to the cache
-  core.info(`Adding to cache: ${extractedPath}`);
-  try {
-    await cache.saveCache([extractedPath], cacheKey);
-  } catch (err) {
-    core.warning(`⚠️ Could not save to the cache.\n${err.message}`);
+  if (useCache) {
+    core.info(`Adding to cache: ${extractedPath}`);
+    try {
+      await cache.saveCache([extractedPath], cacheKey);
+    } catch (err) {
+      core.warning(`⚠️ Could not save to the cache.\n${err.message}`);
+    }
+  }
+
+  // Adding installation to hosted tools cache
+  if (useRunnerCache) {
+    try {
+      await tc.cacheDir(extractedPath, toolName, toolVersion, arch);
+    } catch (err) {
+      core.warning(`⚠️ Failed to copy GCC release to hosted tool cache.\n${err.message}`);
+    }
   }
 
   return extractedPath;
@@ -119,4 +140,28 @@ function findGccRecursive(dir: string, executableName: string): string {
 export function findGcc(root: string, platform?: string): string {
   platform = platform || process.platform;
   return findGccRecursive(root, `arm-none-eabi-gcc${platform === 'win32' ? '.exe' : ''}`);
+}
+
+// returns path to gcc installation downloaded from cache, or undefined if it wasn't found or was wrong.
+async function loadFromCache(installPath: string, cacheKey: string): Promise<string> {
+  // Try to load the GCC installation from the cache
+  let cacheKeyMatched: string | undefined = undefined;
+  try {
+    cacheKeyMatched = await cache.restoreCache([installPath], cacheKey);
+    core.debug(`Matched cache.restoreCache() key: ${cacheKeyMatched}`);
+  } catch (err) {
+    core.warning(`⚠️ Could not find contents in the cache.\n${err.message}`);
+    return '';
+  }
+  if (cacheKeyMatched === cacheKey) {
+    core.info(`Cached version loaded: ${installPath}`);
+    return installPath;
+  }
+  return '';
+}
+
+function loadFromRunnerCache(toolName: string, toolVersion: string, arch: string): string {
+  // will not write runner cache version to action cache,
+  // as we don't know if it was modified after download
+  return tc.find(toolName, toolVersion, arch);
 }

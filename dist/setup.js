@@ -36,7 +36,7 @@ async function downloadAndVerify(urls, checksumTag) {
     }
     throw new Error('No download URLs available');
 }
-export async function install(release, platform, arch) {
+export async function install(release, platform, arch, useCache = true, useRunnerCache = false) {
     const toolName = 'gcc-arm-none-eabi';
     // Get the GCC release info
     const distData = gcc.distributionUrl(release, platform, arch);
@@ -50,18 +50,20 @@ export async function install(release, platform, arch) {
     const cacheKey = `${toolName}-${toolVersion}-${platform}-${arch}-${checksumTag.replace(':', '-')}`;
     const installPath = path.join(os.homedir(), `${toolName}-${toolVersion}-${platform}-${arch}`);
     core.debug(`Cache key: ${cacheKey}`);
-    // Try to load the GCC installation from the cache
-    let cacheKeyMatched = undefined;
-    try {
-        cacheKeyMatched = await cache.restoreCache([installPath], cacheKey);
-        core.debug(`Matched cache.restoreCache() key: ${cacheKeyMatched}`);
+    // Try to use GCC installation from hosted tools cache.
+    // The hash won't be verified as the original archive isn't available...
+    // Assuming the release was copied properly into the runner's tool cache.
+    if (useRunnerCache) {
+        const hcPath = loadFromRunnerCache(toolName, toolVersion, arch);
+        if (hcPath) {
+            return hcPath;
+        }
     }
-    catch (err) {
-        core.warning(`⚠️ Could not find contents in the cache.\n${err.message}`);
-    }
-    if (cacheKeyMatched === cacheKey) {
-        core.info(`Cached version loaded: ${installPath}`);
-        return installPath;
+    if (useCache) {
+        const cachePath = await loadFromCache(installPath, cacheKey);
+        if (cachePath) {
+            return cachePath;
+        }
     }
     core.info(`Cache miss, downloading GCC ${release}`);
     const downloadUrls = [distData.url, ...distData.mirrorUrls];
@@ -82,12 +84,23 @@ export async function install(release, platform, arch) {
         throw new Error(`Can't decompress ${distData.url}`);
     }
     // Adding installation to the cache
-    core.info(`Adding to cache: ${extractedPath}`);
-    try {
-        await cache.saveCache([extractedPath], cacheKey);
+    if (useCache) {
+        core.info(`Adding to cache: ${extractedPath}`);
+        try {
+            await cache.saveCache([extractedPath], cacheKey);
+        }
+        catch (err) {
+            core.warning(`⚠️ Could not save to the cache.\n${err.message}`);
+        }
     }
-    catch (err) {
-        core.warning(`⚠️ Could not save to the cache.\n${err.message}`);
+    // Adding installation to hosted tools cache
+    if (useRunnerCache) {
+        try {
+            await tc.cacheDir(extractedPath, toolName, toolVersion, arch);
+        }
+        catch (err) {
+            core.warning(`⚠️ Failed to copy GCC release to hosted tool cache.\n${err.message}`);
+        }
     }
     return extractedPath;
 }
@@ -111,4 +124,27 @@ function findGccRecursive(dir, executableName) {
 export function findGcc(root, platform) {
     platform = platform || process.platform;
     return findGccRecursive(root, `arm-none-eabi-gcc${platform === 'win32' ? '.exe' : ''}`);
+}
+// returns path to gcc installation downloaded from cache, or undefined if it wasn't found or was wrong.
+async function loadFromCache(installPath, cacheKey) {
+    // Try to load the GCC installation from the cache
+    let cacheKeyMatched = undefined;
+    try {
+        cacheKeyMatched = await cache.restoreCache([installPath], cacheKey);
+        core.debug(`Matched cache.restoreCache() key: ${cacheKeyMatched}`);
+    }
+    catch (err) {
+        core.warning(`⚠️ Could not find contents in the cache.\n${err.message}`);
+        return '';
+    }
+    if (cacheKeyMatched === cacheKey) {
+        core.info(`Cached version loaded: ${installPath}`);
+        return installPath;
+    }
+    return '';
+}
+function loadFromRunnerCache(toolName, toolVersion, arch) {
+    // will not write runner cache version to action cache,
+    // as we don't know if it was modified after download
+    return tc.find(toolName, toolVersion, arch);
 }

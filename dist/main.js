@@ -7,7 +7,9 @@ async function run() {
         if (!release || release === 'latest') {
             release = latestGccVersion();
         }
-        const installPath = await setup.install(release, process.platform, process.arch);
+        const useCache = core.getBooleanInput('use-cache');
+        const useRunnerCache = core.getBooleanInput('use-runner-cache');
+        const installPath = await setup.install(release, process.platform, process.arch, useCache, useRunnerCache);
         const gccPath = setup.findGcc(installPath);
         if (!gccPath) {
             throw new Error(`Could not find gcc executable in ${gccPath}`);
